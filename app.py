@@ -1,6 +1,6 @@
 import os
-from flask import Flask, request, abort
 import requests
+from flask import Flask, request, abort
 from google import genai
 from google.genai import types
 from linebot.v3 import WebhookHandler
@@ -23,6 +23,25 @@ NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+@app.route("/", methods=["GET"])
+def index():
+    """UptimeRobotなどの監視用トップページ（404エラー防止・スリープ対策用）"""
+    return "Bot is running!", 200
+
+
+@app.route("/callback", methods=["POST"])
+def callback():
+    """LINE Messaging APIからのWebhook受信"""
+    signature = request.headers.get("X-Line-Signature")
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return "OK"
+
 
 def fetch_notion_context():
     """複数のNotionデータベースから全レコードを取得してテキスト化する"""
@@ -84,6 +103,7 @@ def fetch_notion_context():
             
     return "\n".join(formatted_data)
 
+
 def generate_gemini_response(user_query, notion_context):
     """Gemini 3.6 Flashで回答を生成する"""
     system_instruction = (
@@ -108,20 +128,34 @@ def generate_gemini_response(user_query, notion_context):
     )
     return response.text
 
-@app.route("/callback", methods=["POST"])
-def callback():
-    signature = request.headers.get("X-Line-Signature")
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return "OK"
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    user_message = event.message.text
+    user_message = event.message.text.strip()
     
+    # ヘルプキーワードの判定
+    if user_message in ["ヘルプ", "help", "Help", "使い方"]:
+        help_text = (
+            "【Notionアシスタントの使い方】\n\n"
+            "Notionに登録されている情報をリアルタイムで検索して回答します。\n\n"
+            "◆ 質問例\n"
+            "・ドライバーどこ？\n"
+            "・サブスクの合計金額は？\n"
+            "・電子レンジの型番教えて\n\n"
+            "◆ 仕組み\n"
+            "Notionの情報を書き換えると自動で最新データが参照されます。"
+        )
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=help_text)]
+                )
+            )
+        return
+
+    # 通常のメッセージ（Notion検索 + Gemini回答）
     try:
         notion_context = fetch_notion_context()
         ai_response = generate_gemini_response(user_message, notion_context)
@@ -136,6 +170,7 @@ def handle_message(event):
                 messages=[TextMessage(text=ai_response)]
             )
         )
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
