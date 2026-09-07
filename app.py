@@ -1,6 +1,6 @@
 import os
 from flask import Flask, request, abort
-from notion_client import Client as NotionClient
+import requests
 from google import genai
 from google.genai import types
 from linebot.v3 import WebhookHandler
@@ -17,13 +17,11 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
-# カンマ区切りで複数のデータベースIDに対応
 NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 
 # クライアント初期化
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-notion = NotionClient(auth=NOTION_API_KEY)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 def fetch_notion_context():
@@ -31,10 +29,23 @@ def fetch_notion_context():
     db_id_list = [db_id.strip() for db_id in NOTION_DATABASE_IDS.split(",") if db_id.strip()]
     formatted_data = []
     
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
+    
     for db_id in db_id_list:
         try:
-            response = notion.databases.query(database_id=db_id)
-            pages = response.get("results", [])
+            url = f"https://api.notion.com/v1/databases/{db_id}/query"
+            res = requests.post(url, headers=headers)
+            
+            if res.status_code != 200:
+                print(f"Notion API エラー ({res.status_code}): {res.text}")
+                continue
+                
+            data = res.json()
+            pages = data.get("results", [])
             
             for page in pages:
                 props = page.get("properties", {})
@@ -74,19 +85,19 @@ def fetch_notion_context():
     return "\n".join(formatted_data)
 
 def generate_gemini_response(user_query, notion_context):
-    """Gemini 2.5 Flash（無料枠）で回答を生成する"""
+    """Gemini 3.6 Flashで回答を生成する"""
     system_instruction = (
         "あなたはユーザーのプライベート生活情報を把握している優秀なパーソナルアシスタントです。\n"
         "提供されたNotionデータベースの最新情報を参考に、ユーザーからの質問に正確かつ丁寧に回答してください。\n\n"
         "【回答ルール】\n"
         "1. 提供されたNotionデータの中に該当する情報がある場合は、分かりやすく要約して回答してください。\n"
-        "2. Notionデータの中に存在しない情報について聞かれた場合は、適当な推測やでまかせを言わず『Notionに該当する情報が登録されていません』と明確に伝えてください。\n"
-        "3. LINEのチャット画面で読みやすいように、適宜箇条書きや改行を活用してください。"
+        "2. サブスクの合計金額など計算を求められた場合は、提供されたデータ内の数値をもとに正確に計算してください。\n"
+        "3. Notionデータの中に存在しない情報について聞かれた場合は、適当な推測やでまかせを言わず『Notionに該当する情報が登録されていません』と明確に伝えてください。\n"
+        "4. LINEのチャット画面で読みやすいように、適宜箇条書きや改行を活用してください。"
     )
     
     prompt = f"【Notionの最新データ】\n{notion_context}\n\n【ユーザーの質問】\n{user_query}"
     
-    # 完全無料枠で高速動作する gemini-2.5-flash を指定
     response = gemini_client.models.generate_content(
         model="gemini-3.6-flash",
         contents=prompt,
