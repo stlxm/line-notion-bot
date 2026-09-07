@@ -1,0 +1,5 @@
+Flask
+notion-client
+google-genai
+line-bot-sdk
+gunicorn
