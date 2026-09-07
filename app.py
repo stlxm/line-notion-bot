@@ -88,7 +88,7 @@ def generate_gemini_response(user_query, notion_context):
     
     # 完全無料枠で高速動作する gemini-2.5-flash を指定
     response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
