@@ -1,5 +1,5 @@
 Flask
-notion-client
+requests
 google-genai
 line-bot-sdk
 gunicorn
