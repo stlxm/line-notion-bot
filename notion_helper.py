@@ -1,21 +1,20 @@
 import os
 import requests
-import google.generativeai as genai
+from google import genai
 
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
-NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 NOTION_URL_DATABASE_ID = os.environ.get("NOTION_URL_DATABASE_ID", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+NOTION_MEMO_DATABASE_ID = os.environ.get("NOTION_MEMO_DATABASE_ID", "")
+NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 
-
-# Gemini APIの初期化
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# Google GenAI クライアントの初期化
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 
 def get_database_title(database_id):
+    """Notionデータベースのタイトルを取得する"""
     if not database_id:
-        return "不明なデータベース"
+        return "無題のデータベース"
     url = f"https://api.notion.com/v1/databases/{database_id}"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -28,11 +27,12 @@ def get_database_title(database_id):
             if title_list:
                 return title_list[0].get("plain_text", "無題のデータベース")
     except Exception as e:
-        print(f"データベースタイトル取得エラー ({database_id}): {e}")
+        print(f"DBタイトル取得エラー: {e}")
     return "データベース"
 
 
 def get_database_properties(database_id):
+    """データベースのプロパティ構造を取得する（手動データ追加用）"""
     if not database_id:
         return []
     url = f"https://api.notion.com/v1/databases/{database_id}"
@@ -47,19 +47,20 @@ def get_database_properties(database_id):
             valid_props = []
             for name, details in props.items():
                 p_type = details.get("type")
-                if p_type not in ["formula", "rollup", "created_time", "last_edited_time", "relation"]:
+                # ユーザーが入力対象にしやすい主要な型に絞る
+                if p_type in ["title", "rich_text", "number", "select", "multi_select", "date", "url"]:
                     valid_props.append((name, p_type))
             return valid_props
     except Exception as e:
-        print(f"プロパティ取得エラー ({database_id}): {e}")
+        print(f"DBプロパティ取得エラー: {e}")
     return []
 
 
 def create_notion_page(database_id, collected_data, prop_types):
+    """対話型データ追加で収集した内容をNotionページとして作成する"""
     if not database_id:
         return False
 
-    url = "https://api.line.me/v2/bot/message/push" # プレースホルダー（実際は下のNotion APIエンドポイント）
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -68,30 +69,23 @@ def create_notion_page(database_id, collected_data, prop_types):
     }
 
     properties = {}
-    for prop_name, val_str in collected_data.items():
-        p_type = prop_types.get(prop_name, "rich_text")
+    for prop_name, val in collected_data.items():
+        p_type = prop_types.get(prop_name)
         if p_type == "title":
-            properties[prop_name] = {"title": [{"text": {"content": val_str}}]}
+            properties[prop_name] = {"title": [{"text": {"content": val}}]}
         elif p_type == "rich_text":
-            properties[prop_name] = {"rich_text": [{"text": {"content": val_str}}]}
+            properties[prop_name] = {"rich_text": [{"text": {"content": val}}]}
         elif p_type == "number":
             try:
-                num_val = float(val_str)
-                properties[prop_name] = {"number": num_val}
+                properties[prop_name] = {"number": float(val)}
             except ValueError:
                 properties[prop_name] = {"number": 0}
         elif p_type == "select":
-            properties[prop_name] = {"select": {"name": val_str}}
-        elif p_type == "multi_select":
-            tags = [t.strip() for t in val_str.replace("、", ",").split(",") if t.strip()]
-            properties[prop_name] = {"multi_select": [{"name": tag} for tag in tags]}
+            properties[prop_name] = {"select": {"name": val}}
         elif p_type == "date":
-            properties[prop_name] = {"date": {"start": val_str}}
-        elif p_type == "checkbox":
-            is_true = val_str.lower() in ["true", "はい", "yes", "1", "on"]
-            properties[prop_name] = {"checkbox": is_true}
+            properties[prop_name] = {"date": {"start": val}}
         elif p_type == "url":
-            properties[prop_name] = {"url": val_str}
+            properties[prop_name] = {"url": val}
 
     payload = {
         "parent": {"database_id": database_id},
@@ -107,10 +101,11 @@ def create_notion_page(database_id, collected_data, prop_types):
 
 
 def add_url_to_notion(url_text):
+    """送信されたURLを後で見るURLデータベースに保存する"""
     if not NOTION_URL_DATABASE_ID:
         return "URL保存用のデータベースIDが設定されていません。"
 
-    url = "https://api.notion.com/v1/pages"
+    notion_url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
@@ -120,15 +115,14 @@ def add_url_to_notion(url_text):
     payload = {
         "parent": {"database_id": NOTION_URL_DATABASE_ID},
         "properties": {
-            "タイトル": {"title": [{"text": {"content": url_text}}]},
-            "URL": {"url": url_text}
+            "URL": {"title": [{"text": {"content": url_text}}]}
         }
     }
 
     try:
-        res = requests.post(url, headers=headers, json=payload)
+        res = requests.post(notion_url, headers=headers, json=payload)
         if res.status_code == 200:
-            return "URLをNotionのデータベースに保存しました！"
+            return "後で見るURLデータベースに保存しました！"
         else:
             print(f"URL保存エラー ({res.status_code}): {res.text}")
             return f"URLの保存に失敗しました (エラーコード: {res.status_code})"
@@ -138,81 +132,87 @@ def add_url_to_notion(url_text):
 
 
 def fetch_notion_context():
-    """連携されているすべてのNotionデータベースからデータを取得してテキスト化する"""
-    db_id_list = [db_id.strip() for db_id in NOTION_DATABASE_IDS.split(",") if db_id.strip()]
-    if not db_id_list:
-        return "データベースが連携されていません。"
+    """環境変数に登録されている複数のNotionデータベースからテキスト情報を抽出し、文字数制限付きでまとめる"""
+    if not NOTION_DATABASE_IDS:
+        return "参照可能なデータベースが設定されていません。"
 
+    db_id_list = [db_id.strip() for db_id in NOTION_DATABASE_IDS.split(",") if db_id.strip()]
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
 
-    all_context_lines = []
+    context_lines = []
+    total_chars = 0
+    MAX_CHARS = 10000  # タイムアウト・メモリ過負荷防止の文字数上限
 
     for db_id in db_id_list:
         db_title = get_database_title(db_id)
         query_url = f"https://api.notion.com/v1/databases/{db_id}/query"
         try:
-            res = requests.post(query_url, headers=headers, json={})
+            res = requests.post(query_url, headers=headers, json={"page_size": 30})
             if res.status_code == 200:
                 results = res.json().get("results", [])
-                all_context_lines.append(f"\n--- データベース: {db_title} ---")
+                context_lines.append(f"\n--- データベース: {db_title} ---")
+                
                 for page in results:
                     props = page.get("properties", {})
-                    row_details = []
+                    row_parts = []
                     for prop_name, prop_val in props.items():
-                        p_type = prop_val.get("type")
+                        v_type = prop_val.get("type")
                         val_str = ""
-                        if p_type == "title":
+                        if v_type == "title":
                             t_list = prop_val.get("title", [])
-                            val_str = "".join([t.get("plain_text", "") for t in t_list])
-                        elif p_type == "rich_text":
+                            if t_list:
+                                val_str = t_list[0].get("plain_text", "")
+                        elif v_type == "rich_text":
                             r_list = prop_val.get("rich_text", [])
-                            val_str = "".join([r.get("plain_text", "") for r in r_list])
-                        elif p_type == "number":
+                            if r_list:
+                                val_str = r_list[0].get("plain_text", "")
+                        elif v_type == "number":
                             val_str = str(prop_val.get("number", ""))
-                        elif p_type == "select":
+                        elif v_type == "select":
                             sel = prop_val.get("select")
-                            val_str = sel.get("name", "") if sel else ""
-                        elif p_type == "date":
-                            d = prop_val.get("date")
-                            val_str = d.get("start", "") if d else ""
-                        elif p_type == "checkbox":
-                            val_str = str(prop_val.get("checkbox", ""))
-                        
+                            if sel:
+                                val_str = sel.get("name", "")
+                        elif v_type == "date":
+                            date_obj = prop_val.get("date")
+                            if date_obj:
+                                val_str = date_obj.get("start", "")
+
                         if val_str:
-                            row_details.append(f"{prop_name}: {val_str}")
-                    if row_details:
-                        all_context_lines.append(" | ".join(row_details))
+                            row_parts.append(f"{prop_name}: {val_str}")
+
+                    if row_parts:
+                        line = " | ".join(row_parts)
+                        if total_chars + len(line) > MAX_CHARS:
+                            context_lines.append("...(文字数制限のため省略)...")
+                            break
+                        context_lines.append(line)
+                        total_chars += len(line)
         except Exception as e:
-            print(f"コンテキスト取得中のエラー ({db_id}): {e}")
+            print(f"DBデータ取得エラー ({db_id}): {e}")
 
-    context_text = "\n".join(all_context_lines)
-
-    # 🔍 デバッグ用ログ出力（RenderのLogsタブで確認できます）
-    print(f"DEBUG - 取得したNotionコンテキスト:\n{context_text}")
-
-    return context_text
+    return "\n".join(context_lines)
 
 
-def generate_gemini_response(user_message, context):
-    """取得したNotionデータをコンテキストとしてGeminiに回答を生成させる"""
-    if not GEMINI_API_KEY:
-        return "Gemini APIキーが設定されていません。"
-
+def generate_gemini_response(user_message, notion_context):
+    """Google GenAI SDK を使用してNotionデータを元に応答を生成（タイムアウト対策版）"""
     try:
-        model = genai.GenerativeModel("gemini-3.6-flash")
         prompt = (
-            "あなたは優秀な家計簿・パーソナルアシスタントです。\n"
-            "以下のNotionデータベースの内容（コンテキスト）を基にして、ユーザーの質問に日本語で親切に答えてください。\n"
-            "情報が見つからない場合は「該当する情報が登録されていません」と答えてください。\n\n"
-            f"【Notionデータ】\n{context}\n\n"
-            f"【ユーザーの質問】\n{user_message}"
+            "あなたはユーザーのNotionデータを管理・参照する優秀なパーソナルアシスタントです。"
+            "以下のNotionから取得したコンテキスト情報を参考にして、ユーザーからの質問に日本語で簡潔かつ正確に答えてください。\n\n"
+            f"【Notionコンテキスト情報】\n{notion_context}\n\n"
+            f"【ユーザーからの質問】\n{user_message}"
         )
-        response = model.generate_content(prompt)
+
+        # 最新の google-genai SDK 形式で呼び出し
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
         return response.text
     except Exception as e:
-        print(f"Gemini生成エラー: {e}")
+        print(f"Gemini APIエラー: {e}")
         return f"AIの応答生成中にエラーが発生しました: {str(e)}"
