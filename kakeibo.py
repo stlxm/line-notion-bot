@@ -400,3 +400,34 @@ def register_monthly_fixed_expenses():
             total_amount += item["amount"]
 
     return success_count, total_amount
+
+
+def add_fixed_expense_to_notion(store_name, amount, category="固定費", card_name="現金"):
+    """Notionの固定費マスタDBへ新しい固定費を1件追加します"""
+    if not NOTION_FIXED_DATABASE_ID:
+        return False
+
+    url = "https://api.notion.com/v1/pages"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "parent": {"database_id": NOTION_FIXED_DATABASE_ID},
+        "properties": {
+            "内容・店名": {"title": [{"text": {"content": store_name}}]},
+            "金額": {"number": float(amount)},
+            "ジャンル": {"select": {"name": category}},
+            "カード・支払方法": {"select": {"name": card_name}},
+            "有効": {"checkbox": True}
+        }
+    }
+
+    try:
+        res = requests.post(url, headers=headers, json=payload)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"固定費マスタ追加エラー: {e}")
+        return False
