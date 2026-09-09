@@ -203,7 +203,7 @@ def generate_gemini_response(user_message, context):
         return "Gemini APIキーが設定されていません。"
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.6-flash")
         prompt = (
             "あなたは優秀な家計簿・パーソナルアシスタントです。\n"
             "以下のNotionデータベースの内容（コンテキスト）を基にして、ユーザーの質問に日本語で親切に答えてください。\n"
