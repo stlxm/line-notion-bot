@@ -1,5 +1,7 @@
 import os
+import json
 import requests
+from urllib.parse import parse_qsl
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, abort
 from google import genai
@@ -7,9 +9,10 @@ from google.genai import types
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
-    Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
+    Configuration, ApiClient, MessagingApi, ReplyMessageRequest,
+    TextMessage, FlexMessage, FlexContainer
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
 
 app = Flask(__name__)
 
@@ -21,13 +24,13 @@ NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 NOTION_URL_DATABASE_ID = os.environ.get("NOTION_URL_DATABASE_ID", "")
 NOTION_PAGE_URL = os.environ.get("NOTION_PAGE_URL", "")
+NOTION_KAKEIBO_DATABASE_ID = os.environ.get("NOTION_KAKEIBO_DATABASE_ID", "")
 
 # クライアント初期化
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ユーザーごとの対話状態を記録する辞書
 user_states = {}
 
 
@@ -48,13 +51,236 @@ def callback():
 
 
 def reply_line(reply_token, text):
-    """LINEにメッセージを返信する共通関数"""
+    """LINEにテキストメッセージを返信する"""
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[TextMessage(text=text)]
+            )
+        )
+
+
+def get_notion_select_options(prop_name):
+    """Notionの家計簿DBから指定した列（Select）の選択肢一覧を動的取得する"""
+    if not NOTION_KAKEIBO_DATABASE_ID:
+        return []
+
+    url = f"https://api.notion.com/v1/databases/{NOTION_KAKEIBO_DATABASE_ID}"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28"
+    }
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            data = res.json()
+            props = data.get("properties", {})
+            target_prop = props.get(prop_name, {})
+            if target_prop.get("type") == "select":
+                options = target_prop.get("select", {}).get("options", [])
+                return [opt.get("name") for opt in options if opt.get("name")]
+    except Exception as e:
+        print(f"Notion選択肢取得エラー ({prop_name}): {e}")
+    return []
+
+
+def create_buttons_flex_message(title, options, callback_action):
+    """選択肢のリストからLINEのボタンメッセージを生成する"""
+    buttons = []
+    # 2列並びのレイアウトに整形
+    for i in range(0, len(options), 2):
+        row_buttons = []
+        for opt in options[i:i+2]:
+            row_buttons.append({
+                "type": "button",
+                "style": "primary" if i == 0 else "secondary",
+                "height": "sm",
+                "action": {
+                    "type": "postback",
+                    "label": opt[:20],
+                    "data": f"action={callback_action}&val={opt}"
+                }
+            })
+        buttons.append({
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": row_buttons
+        })
+
+    flex_json = {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": title, "weight": "bold", "size": "md", "align": "center", "margin": "md"},
+                {"type": "separator", "margin": "lg"}
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": buttons
+        }
+    }
+    return FlexMessage(alt_text=title, contents=FlexContainer.from_json(json.dumps(flex_json)))
+
+
+def send_kakeibo_category_select(reply_token, card_name, store_name, amount, date_str):
+    """GAS通知受領時：Notionのジャンル選択肢を表示する"""
+    categories = get_notion_select_options("ジャンル")
+    if not categories:
+        categories = ["食費", "日用品", "交通費", "娯楽", "固定費", "未分類"]
+
+    buttons = []
+    for i in range(0, len(categories), 2):
+        row_buttons = []
+        for cat in categories[i:i+2]:
+            row_buttons.append({
+                "type": "button",
+                "style": "primary" if i == 0 else "secondary",
+                "height": "sm",
+                "action": {
+                    "type": "postback",
+                    "label": cat[:20],
+                    "data": f"action=kakeibo_save&card={card_name}&store={store_name}&amount={amount}&date={date_str}&cat={cat}"
+                }
+            })
+        buttons.append({
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": row_buttons
+        })
+
+    flex_json = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": "💳 カード利用検知", "weight": "bold", "color": "#1DB446", "size": "sm"},
+                {"type": "text", "text": f"¥{int(float(amount)):,}", "weight": "bold", "size": "xxl", "margin": "md"}
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "baseline",
+                    "contents": [
+                        {"type": "text", "text": "利用先", "color": "#aaaaaa", "size": "sm", "flex": 2},
+                        {"type": "text", "text": store_name, "weight": "bold", "color": "#666666", "size": "sm", "flex": 5}
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "baseline",
+                    "contents": [
+                        {"type": "text", "text": "カード", "color": "#aaaaaa", "size": "sm", "flex": 2},
+                        {"type": "text", "text": card_name, "color": "#666666", "size": "sm", "flex": 5}
+                    ],
+                    "margin": "xs"
+                },
+                {"type": "separator", "margin": "lg"},
+                {"type": "text", "text": "ジャンルを選択してください", "size": "xs", "color": "#888888", "margin": "lg", "align": "center"}
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": buttons
+        }
+    }
+
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[FlexMessage(alt_text=f"カード利用: {store_name} ¥{amount}", contents=FlexContainer.from_json(json.dumps(flex_json)))]
+            )
+        )
+
+
+def save_kakeibo_to_notion(card_name, store_name, amount, date_str, category):
+    """Notionの家計簿データベースに保存する"""
+    if not NOTION_KAKEIBO_DATABASE_ID:
+        return "家計簿DB IDが設定されていません。Renderの環境変数 NOTION_KAKEIBO_DATABASE_ID を設定してください。"
+
+    url = "https://api.notion.com/v1/pages"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "parent": {"database_id": NOTION_KAKEIBO_DATABASE_ID},
+        "properties": {
+            "内容・店名": {"title": [{"text": {"content": store_name}}]},
+            "金額": {"number": float(amount)},
+            "日付": {"date": {"start": date_str}},
+            "ジャンル": {"select": {"name": category}},
+            "カード・支払方法": {"select": {"name": card_name}}
+        }
+    }
+
+    try:
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            return f"家計簿に記録しました！\n\n【店名】{store_name}\n【金額】¥{int(float(amount)):,}\n【ジャンル】{category}\n【支払方法】{card_name}\n【日付】{date_str}"
+        else:
+            print(f"Notion家計簿保存エラー ({res.status_code}): {res.text}")
+            return f"家計簿の保存に失敗しました (エラーコード: {res.status_code})"
+    except Exception as e:
+        print(f"家計簿保存通信エラー: {e}")
+        return f"エラーが発生しました: {str(e)}"
+
+
+def start_manual_kakeibo(user_id, reply_token, text):
+    """手動入力の開始（金額と店名の受領 -> ジャンル選択の提示）"""
+    parts = text.strip().split()
+    if len(parts) < 3:
+        reply_line(reply_token, "形式が正しくありません。\n【入力例】\n支出 1200 ラーメン")
+        return
+
+    try:
+        amount = float(parts[1])
+    except ValueError:
+        reply_line(reply_token, "金額は数値で入力してください。（例: 支出 1200 ラーメン）")
+        return
+
+    store_name = parts[2]
+    jst = timezone(timedelta(hours=+9), "JST")
+    date_str = datetime.now(jst).strftime("%Y-%m-%d")
+
+    user_states[user_id] = {
+        "step": "MANUAL_KAKEIBO_GENRE",
+        "amount": amount,
+        "store": store_name,
+        "date": date_str
+    }
+
+    categories = get_notion_select_options("ジャンル")
+    if not categories:
+        categories = ["食費", "日用品", "交通費", "娯楽", "固定費", "未分類"]
+
+    flex_msg = create_buttons_flex_message("ジャンルを選択してください", categories, "manual_cat_select")
+    
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[flex_msg]
             )
         )
 
@@ -71,19 +297,14 @@ def add_url_to_notion(url_string):
         "Content-Type": "application/json"
     }
 
-    # 日本時間（JST）の取得
     jst = timezone(timedelta(hours=+9), "JST")
     now_str = datetime.now(jst).strftime("%Y-%m-%d %H:%M")
 
     payload = {
         "parent": {"database_id": NOTION_URL_DATABASE_ID},
         "properties": {
-            "URL": {
-                "title": [{"text": {"content": url_string}}]
-            },
-            "時間": {
-                "rich_text": [{"text": {"content": now_str}}]
-            }
+            "URL": {"title": [{"text": {"content": url_string}}]},
+            "時間": {"rich_text": [{"text": {"content": now_str}}]}
         }
     }
 
@@ -286,24 +507,96 @@ def start_db_selection(user_id, reply_token):
     reply_line(reply_token, msg)
 
 
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    """LINEのボタンが押された時のポストバック処理"""
+    user_id = event.source.user_id
+    data = event.postback.data
+    params = dict(parse_qsl(data))
+    action = params.get("action")
+
+    # GAS通知からの保存
+    if action == "kakeibo_save":
+        card = params.get("card")
+        store = params.get("store")
+        amount = params.get("amount")
+        date_str = params.get("date")
+        category = params.get("cat")
+
+        res_msg = save_kakeibo_to_notion(card, store, amount, date_str, category)
+        reply_line(event.reply_token, res_msg)
+        return
+
+    # 手動記録: ジャンル選択後の処理
+    if action == "manual_cat_select" and user_id in user_states:
+        selected_cat = params.get("val")
+        user_states[user_id]["category"] = selected_cat
+        user_states[user_id]["step"] = "MANUAL_KAKEIBO_CARD"
+
+        cards = get_notion_select_options("カード・支払方法")
+        if not cards:
+            cards = ["現金", "楽天カード", "三井住友カード", "PayPay", "その他"]
+
+        flex_msg = create_buttons_flex_message("支払方法を選択してください", cards, "manual_card_select")
+
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[flex_msg]
+                )
+            )
+        return
+
+    # 手動記録: 支払方法選択後の完了処理
+    if action == "manual_card_select" and user_id in user_states:
+        selected_card = params.get("val")
+        state_data = user_states[user_id]
+
+        res_msg = save_kakeibo_to_notion(
+            card_name=selected_card,
+            store_name=state_data["store"],
+            amount=state_data["amount"],
+            date_str=state_data["date"],
+            category=state_data["category"]
+        )
+        del user_states[user_id]
+        reply_line(event.reply_token, res_msg)
+        return
+
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_id = event.source.user_id
     user_message = event.message.text.strip()
 
+    # コマンド: GASからのカード通知判定（CARD_NOTIFY|カード名|店名|金額|日付）
+    if user_message.startswith("CARD_NOTIFY|"):
+        parts = user_message.split("|")
+        if len(parts) >= 5:
+            _, card_name, store_name, amount, date_str = parts[:5]
+            send_kakeibo_category_select(event.reply_token, card_name, store_name, amount, date_str)
+            return
+
+    # コマンド: 手動で支出入力（例: 支出 1200 ラーメン）
+    if user_message.startswith("支出 "):
+        start_manual_kakeibo(user_id, event.reply_token, user_message)
+        return
+
     # キャンセル処理
     if user_message == "キャンセル":
         if user_id in user_states:
             del user_states[user_id]
-            reply_line(event.reply_token, "データの追加処理を中断しました。")
+            reply_line(event.reply_token, "処理を中断しました。")
         else:
-            reply_line(event.reply_token, "現在進行中の追加処理はありません。")
+            reply_line(event.reply_token, "進行中の処理はありません。")
         return
 
-    # 対話モード中の処理
+    # 汎用対話モード中の処理
     if user_id in user_states:
         state_data = user_states[user_id]
-        step = state_data["step"]
+        step = state_data.get("step")
 
         if step == "SELECT_DB":
             if user_message.isdigit():
@@ -373,7 +666,7 @@ def handle_message(event):
                 reply_line(event.reply_token, "はい または いいえ で送信してください。（中断する場合は キャンセル と送信してください）")
                 return
 
-    # コマンド: URL送信判定（http:// または https:// で始まる場合）
+    # コマンド: URL送信判定
     if user_message.startswith("http://") or user_message.startswith("https://"):
         res_text = add_url_to_notion(user_message)
         reply_line(event.reply_token, res_text)
@@ -398,15 +691,16 @@ def handle_message(event):
             "【Notionアシスタントの使い方】\n\n"
             "◆ データ検索\n"
             "知りたい情報をそのまま質問してください。\n"
-            "例: ドライバーどこ？ / サブスクの合計金額は？\n\n"
+            "例: 今月の食費合計は？ / 楽天カードの利用履歴教えて\n\n"
+            "◆ 手動で支出記録（家計簿）\n"
+            "「支出 金額 店名」と送信すると、Notion上の選択肢（ジャンル・支払方法）がボタンで表示されます。\n"
+            "例: 支出 1200 ラーメン\n\n"
             "◆ 後で見るURL追加\n"
-            "URL（http...）をそのまま送信すると後で見るリストへ日時付きで追加されます。\n\n"
-            "◆ データ追加\n"
-            "データ追加 と送信すると対話形式でNotionへデータを保存できます。\n\n"
+            "URL（http...）を送ると後で見るリストへ追加されます。\n\n"
+            "◆ 汎用データ追加\n"
+            "「データ追加」と送信すると対話形式で任意のNotion DBへ追加できます。\n\n"
             "◆ Notionリンク\n"
-            "リンク または Notion と送信するとNotionのページURLを表示します。\n\n"
-            "◆ キャンセル\n"
-            "入力途中で キャンセル と送るといつでも処理を中断できます。"
+            "「Notion」と送信するとNotionページURLを表示します。"
         )
         reply_line(event.reply_token, help_text)
         return
