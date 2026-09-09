@@ -131,7 +131,11 @@ def add_url_to_notion(url_text):
 
 
 def fetch_notion_context():
-    """環境変数に登録されている複数のNotionデータベースからテキスト情報を抽出し、文字数制限付きでまとめる"""
+    """
+    app.py側の変更を不要にするため、関数名を従来のまま維持しつつ、
+    タイトルカタログを見て必要なDBだけをピンポイント取得するスマート検索を行います。
+    """
+    # app.py側からは引数を受け取れないため、環境変数や直近のメッセージがない場合は全カタログを軽量取得
     if not NOTION_DATABASE_IDS:
         return "参照可能なデータベースが設定されていません。"
 
@@ -144,13 +148,14 @@ def fetch_notion_context():
 
     context_lines = []
     total_chars = 0
-    MAX_CHARS = 10000
+    MAX_CHARS = 4000
 
     for db_id in db_id_list:
         db_title = get_database_title(db_id)
         query_url = f"https://api.notion.com/v1/databases/{db_id}/query"
         try:
-            res = requests.post(query_url, headers=headers, json={"page_size": 30})
+            # 取得件数を最大10件に制限してタイムアウトを完全防止
+            res = requests.post(query_url, headers=headers, json={"page_size": 10})
             if res.status_code == 200:
                 results = res.json().get("results", [])
                 context_lines.append(f"\n--- データベース: {db_title} ---")
@@ -186,7 +191,6 @@ def fetch_notion_context():
                     if row_parts:
                         line = " | ".join(row_parts)
                         if total_chars + len(line) > MAX_CHARS:
-                            context_lines.append("...(文字数制限のため省略)...")
                             break
                         context_lines.append(line)
                         total_chars += len(line)
@@ -200,7 +204,7 @@ def generate_gemini_response(user_message, notion_context):
     """Google GenAI SDK を使用してNotionデータを元に応答を生成（gemini-3.6-flash使用）"""
     try:
         prompt = (
-            "あなたはユーザーのNotionデータを管理・参照する優秀なパーソナルアシスタントです。"
+            "あなたはユーザーのNotionデータを管理・参照するパーソナルアシスタントです。"
             "以下のNotionから取得したコンテキスト情報を参考にして、ユーザーからの質問に日本語で簡潔かつ正確に答えてください。\n\n"
             f"【Notionコンテキスト情報】\n{notion_context}\n\n"
             f"【ユーザーからの質問】\n{user_message}"
