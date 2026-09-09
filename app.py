@@ -17,6 +17,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
 import kakeibo
 import notion_helper
 import memo
+import menu
 
 app = Flask(__name__)
 
@@ -129,6 +130,14 @@ def handle_postback(event):
     params = dict(parse_qsl(data))
     action = params.get("action")
 
+    # メニューから「支出を入力」が押された場合
+    if action == "quick_input_kakeibo":
+        reply_line(
+            event.reply_token,
+            "支出を入力します。\n【送信例】\n・支出 1200 ラーメン\n・支出 500"
+        )
+        return
+
     # キャンセルボタン選択時
     if action == "cancel_registration":
         if user_id in user_states:
@@ -195,7 +204,13 @@ def handle_message(event):
     user_id = event.source.user_id
     user_message = event.message.text.strip()
 
-    # 1. GASカード通知
+    # 1. 機能選択メニューの表示（「メニュー」「機能」などで反応）
+    if user_message in ["メニュー", "機能", "機能一覧", "menu", "Menu"]:
+        flex_menu = menu.create_main_menu_flex()
+        reply_line(event.reply_token, [flex_menu])
+        return
+
+    # 2. GASカード通知
     if user_message.startswith("CARD_NOTIFY|"):
         parts = user_message.split("|")
         if len(parts) >= 5:
@@ -204,7 +219,7 @@ def handle_message(event):
             reply_line(event.reply_token, [flex_msg])
             return
 
-    # 2. メモ追加（例: メモ 買い物リスト）
+    # 3. メモ追加（例: メモ 買い物リスト）
     if user_message.startswith("メモ "):
         memo_text = user_message[3:].strip()
         if memo_text:
@@ -212,7 +227,7 @@ def handle_message(event):
             reply_line(event.reply_token, res_text)
             return
 
-    # 3. メモ一覧の確認
+    # 4. メモ一覧の確認
     if user_message in ["メモ一覧", "メモ確認"]:
         memos = memo.get_memos_from_notion()
         if not memos:
@@ -225,7 +240,7 @@ def handle_message(event):
             reply_line(event.reply_token, "\n".join(lines))
         return
 
-    # 4. メモ削除（ボタン選択UI）
+    # 5. メモ削除（ボタン選択UI）
     if user_message in ["メモ削除", "メモ 削除"]:
         flex_msg = memo.create_memo_delete_flex()
         if flex_msg:
@@ -234,7 +249,7 @@ def handle_message(event):
             reply_line(event.reply_token, "削除できるメモがありません。")
         return
 
-    # 5. 予算設定コマンド
+    # 6. 予算設定コマンド
     if user_message.startswith("予算"):
         parts = user_message.split()
         jst = timezone(timedelta(hours=+9), "JST")
@@ -270,7 +285,7 @@ def handle_message(event):
         reply_line(event.reply_token, reply_text)
         return
 
-    # 6. 固定費追加コマンド
+    # 7. 固定費追加コマンド
     if user_message.startswith("固定費追加"):
         parts = user_message.split()
         if len(parts) >= 3 and parts[2].isdigit():
@@ -301,7 +316,7 @@ def handle_message(event):
         reply_line(event.reply_token, reply_text)
         return
 
-    # 7. 固定費一括登録
+    # 8. 固定費一括登録
     if user_message in ["固定費", "固定費登録", "固定費 登録"]:
         count, total = kakeibo.register_monthly_fixed_expenses()
         jst = timezone(timedelta(hours=+9), "JST")
@@ -313,7 +328,7 @@ def handle_message(event):
         reply_line(event.reply_token, reply_text)
         return
 
-    # 8. 固定費一覧
+    # 9. 固定費一覧
     if user_message in ["固定費一覧", "固定費確認"]:
         items = kakeibo.get_fixed_expenses_from_notion()
         if not items:
@@ -330,7 +345,7 @@ def handle_message(event):
         reply_line(event.reply_token, reply_text)
         return
 
-    # 9. 手動で支出入力
+    # 10. 手動で支出入力
     if user_message.startswith("支出"):
         start_manual_kakeibo(user_id, event.reply_token, user_message)
         return
@@ -344,7 +359,7 @@ def handle_message(event):
             reply_line(event.reply_token, "進行中の処理はありません。")
         return
 
-    # 10. 対話型データ追加モード中の処理
+    # 11. 対話型データ追加モード中の処理
     if user_id in user_states:
         state_data = user_states[user_id]
         step = state_data.get("step")
@@ -407,7 +422,7 @@ def handle_message(event):
                 del user_states[user_id]
                 reply_line(event.reply_token, reply_text)
                 return
-            elif user_message == "いいえ":
+            elif user_message == "概念":
                 reply_line(event.reply_token, "登録をキャンセルし、最初からやり直します。")
                 start_db_selection(user_id, event.reply_token)
                 return
@@ -415,13 +430,13 @@ def handle_message(event):
                 reply_line(event.reply_token, "はい または いいえ で送信してください。（中断する場合は キャンセル と送信してください）")
                 return
 
-    # 11. URL送信
+    # 12. URL送信
     if user_message.startswith("http://") or user_message.startswith("https://"):
         res_text = notion_helper.add_url_to_notion(user_message)
         reply_line(event.reply_token, res_text)
         return
 
-    # 12. Notion リンク表示
+    # 13. Notion リンク表示
     if user_message in ["リンク", "Notion", "notion", "Notionリンク", "notionリンク"]:
         if NOTION_PAGE_URL:
             reply_line(event.reply_token, f"Notionのページはこちらです:\n{NOTION_PAGE_URL}")
@@ -429,42 +444,35 @@ def handle_message(event):
             reply_line(event.reply_token, "NotionのURLが設定されていません。")
         return
 
-    # 13. データ追加
+    # 14. データ追加
     if user_message == "データ追加":
         start_db_selection(user_id, event.reply_token)
         return
 
-    # 14. ヘルプ
+    # 15. ヘルプ
     if user_message in ["ヘルプ", "help", "Help", "使い方"]:
         help_text = (
             "【Notionアシスタントの使い方】\n\n"
+            "◆ メニュー呼び出し\n"
+            "メニュー と送信するとカード型の機能選択ボタンが表示されます。\n\n"
             "◆ データ検索\n"
             "知りたい情報をそのまま質問してください。\n"
             "例: 今月の食費合計は？ / 楽天カードの利用履歴教えて\n\n"
             "◆ メモ機能\n"
             "・追加: メモ 卵を買う\n"
             "・一覧: メモ一覧\n"
-            "・削除: メモ削除（ボタンで選択削除）\n\n"
+            "・削除: メモ削除\n\n"
             "◆ 手動で支出記録\n"
             "支出 金額 店名（例: 支出 1200 ラーメン）\n\n"
-            "◆ 予算の設定\n"
-            "・全体予算: 予算 100000\n"
-            "・ジャンル予算: 予算 食費 30000\n\n"
-            "◆ 固定費・サブスクの一括登録・追加\n"
+            "◆ 固定費の一括登録・追加\n"
             "・一括登録: 固定費\n"
             "・一覧確認: 固定費一覧\n"
-            "・新規追加: 固定費追加 ジム会費 8000 固定費 三井住友カード\n\n"
-            "◆ 後で見るURL追加\n"
-            "URL（http...）を送るとリストへ追加されます。\n\n"
-            "◆ 汎用データ追加\n"
-            "データ追加 と送信すると対話形式で任意のNotion DBへ追加できます。\n\n"
-            "◆ Notionリンク\n"
-            "Notion と送信するとページURLを表示します。"
+            "・新規追加: 固定費追加 ジム会費 8000 固定費 三井住友カード"
         )
         reply_line(event.reply_token, help_text)
         return
 
-    # 15. 通常検索（Gemini回答）
+    # 16. 通常検索（Gemini回答）
     try:
         notion_context = notion_helper.fetch_notion_context()
         ai_response = notion_helper.generate_gemini_response(user_message, notion_context)
