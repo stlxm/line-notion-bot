@@ -145,6 +145,32 @@ def handle_postback(event):
         reply_line(event.reply_token, "操作をキャンセルしました。")
         return
 
+    # カード通知：そのままジャンル選択へ進む場合
+    if action == "card_select_cat":
+        card = params.get("card")
+        store = params.get("store")
+        amount = params.get("amount")
+        date_str = params.get("date")
+
+        flex_msg = kakeibo.create_card_notify_flex(card, store, amount, date_str)
+        reply_line(event.reply_token, [flex_msg])
+        return
+
+    # カード通知：店名変更を開始する場合
+    if action == "card_change_store_start":
+        user_states[user_id] = {
+            "step": "WAITING_STORE_NAME_CHANGE",
+            "card": params.get("card"),
+            "old_store": params.get("store"),
+            "amount": params.get("amount"),
+            "date": params.get("date")
+        }
+        reply_line(
+            event.reply_token,
+            f"新しい利用先・店名を入力して送信してください。\n（現在の仮名称: {params.get('store')}\n※ 変更しない場合は キャンセル と送信してください）"
+        )
+        return
+
     # メモ削除のボタンタップ時
     if action == "delete_memo":
         page_id = params.get("id")
@@ -215,9 +241,45 @@ def handle_message(event):
         parts = user_message.split("|")
         if len(parts) >= 5:
             _, card_name, store_name, amount, date_str = parts[:5]
-            flex_msg = kakeibo.create_card_notify_flex(card_name, store_name, amount, date_str)
+            flex_msg = kakeibo.create_card_notify_action_flex(card_name, store_name, amount, date_str)
             reply_line(event.reply_token, [flex_msg])
             return
+
+    # キャンセル処理（対話型ステートの解除）
+    if user_message == "キャンセル":
+        if user_id in user_states:
+            state_data = user_states[user_id]
+            # 店名変更待ち状態からのキャンセルの場合
+            if state_data.get("step") == "WAITING_STORE_NAME_CHANGE":
+                card = state_data["card"]
+                store = state_data["old_store"]
+                amount = state_data["amount"]
+                date_str = state_data["date"]
+                del user_states[user_id]
+
+                flex_msg = kakeibo.create_card_notify_flex(card, store, amount, date_str)
+                reply_line(event.reply_token, [f"店名変更をキャンセルしました。（元の名称: {store}）", flex_msg])
+                return
+            else:
+                del user_states[user_id]
+                reply_line(event.reply_token, "処理を中断しました。")
+        else:
+            reply_line(event.reply_token, "進行中の処理はありません。")
+        return
+
+    # 対話型ステート処理（店名変更待ち）
+    if user_id in user_states and user_states[user_id].get("step") == "WAITING_STORE_NAME_CHANGE":
+        state_data = user_states[user_id]
+        new_store_name = user_message
+        card = state_data["card"]
+        amount = state_data["amount"]
+        date_str = state_data["date"]
+
+        del user_states[user_id]
+
+        flex_msg = kakeibo.create_card_notify_flex(card, new_store_name, amount, date_str)
+        reply_line(event.reply_token, [f"店名を「{new_store_name}」に変更しました。", flex_msg])
+        return
 
     # 3. メモ追加（例: メモ 買い物リスト）
     if user_message.startswith("メモ "):
@@ -350,15 +412,6 @@ def handle_message(event):
         start_manual_kakeibo(user_id, event.reply_token, user_message)
         return
 
-    # キャンセル処理
-    if user_message == "キャンセル":
-        if user_id in user_states:
-            del user_states[user_id]
-            reply_line(event.reply_token, "処理を中断しました。")
-        else:
-            reply_line(event.reply_token, "進行中の処理はありません。")
-        return
-
     # 11. 対話型データ追加モード中の処理
     if user_id in user_states:
         state_data = user_states[user_id]
@@ -422,7 +475,7 @@ def handle_message(event):
                 del user_states[user_id]
                 reply_line(event.reply_token, reply_text)
                 return
-            elif user_message == "概念":
+            elif user_message == "いいえ":
                 reply_line(event.reply_token, "登録をキャンセルし、最初からやり直します。")
                 start_db_selection(user_id, event.reply_token)
                 return
