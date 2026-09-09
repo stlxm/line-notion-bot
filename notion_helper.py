@@ -47,7 +47,6 @@ def get_database_properties(database_id):
             valid_props = []
             for name, details in props.items():
                 p_type = details.get("type")
-                # ユーザーが入力対象にしやすい主要な型に絞る
                 if p_type in ["title", "rich_text", "number", "select", "multi_select", "date", "url"]:
                     valid_props.append((name, p_type))
             return valid_props
@@ -145,7 +144,7 @@ def fetch_notion_context():
 
     context_lines = []
     total_chars = 0
-    MAX_CHARS = 10000  # タイムアウト・メモリ過負荷防止の文字数上限
+    MAX_CHARS = 10000
 
     for db_id in db_id_list:
         db_title = get_database_title(db_id)
@@ -198,7 +197,7 @@ def fetch_notion_context():
 
 
 def generate_gemini_response(user_message, notion_context):
-    """Google GenAI SDK を使用してNotionデータを元に応答を生成（タイムアウト対策版）"""
+    """Google GenAI SDK を使用してNotionデータを元に応答を生成（gemini-3.6-flash使用）"""
     try:
         prompt = (
             "あなたはユーザーのNotionデータを管理・参照する優秀なパーソナルアシスタントです。"
@@ -207,9 +206,8 @@ def generate_gemini_response(user_message, notion_context):
             f"【ユーザーからの質問】\n{user_message}"
         )
 
-        # 最新の google-genai SDK 形式で呼び出し
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=prompt,
         )
         return response.text
