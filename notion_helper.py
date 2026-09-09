@@ -22,7 +22,7 @@ def get_database_title(database_id):
         "Notion-Version": "2022-06-28"
     }
     try:
-        res = requests.get(url, headers=headers)
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             title_list = res.json().get("title", [])
             if title_list:
@@ -42,7 +42,7 @@ def get_database_properties(database_id):
         "Notion-Version": "2022-06-28"
     }
     try:
-        res = requests.get(url, headers=headers)
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             props = res.json().get("properties", {})
             valid_props = []
@@ -93,7 +93,7 @@ def create_notion_page(database_id, collected_data, prop_types):
     }
 
     try:
-        res = requests.post(url, headers=headers, json=payload)
+        res = requests.post(url, headers=headers, json=payload, timeout=5)
         return res.status_code == 200
     except Exception as e:
         print(f"Notionページ作成エラー: {e}")
@@ -102,45 +102,36 @@ def create_notion_page(database_id, collected_data, prop_types):
 
 def add_url_to_notion(url_text):
     """送信されたURLを後で見るURLデータベースに保存する"""
-    if not NOTION_URL_DATABASE_ID:
-        return "URL保存用のデータベースIDが設定されていません。"
-
-    notion_url = "https://api.notion.com/v1/pages"
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "parent": {"database_id": NOTION_URL_DATABASE_ID},
-        "properties": {
-            "URL": {"title": [{"text": {"content": url_text}}]}
+    if NOTION_URL_DATABASE_ID:
+        notion_url = "https://api.notion.com/v1/pages"
+        headers = {
+            "Authorization": f"Bearer {NOTION_API_KEY}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json"
         }
-    }
-
-    try:
-        res = requests.post(notion_url, headers=headers, json=payload)
-        if res.status_code == 200:
-            return "後で見るURLデータベースに保存しました！"
-        else:
-            print(f"URL保存エラー ({res.status_code}): {res.text}")
-            return f"URLの保存に失敗しました (エラーコード: {res.status_code})"
-    except Exception as e:
-        print(f"URL保存通信エラー: {e}")
-        return f"エラーが発生しました: {str(e)}"
+        payload = {
+            "parent": {"database_id": NOTION_URL_DATABASE_ID},
+            "properties": {
+                "URL": {"title": [{"text": {"content": url_text}}]}
+            }
+        }
+        try:
+            res = requests.post(notion_url, headers=headers, json=payload, timeout=5)
+            if res.status_code == 200:
+                return "後で見るURLデータベースに保存しました！"
+        except Exception as e:
+            print(f"URL保存エラー: {e}")
+    return "URLの保存に失敗しました。"
 
 
 def fetch_notion_context():
-    """互換性維持のためのダミー（実際には使われず、dynamic_searchが処理します）"""
+    """互換性維持のためのダミー"""
     return ""
 
 
 def dynamic_search_and_fetch(user_message):
     """
-    1. 接続されている全DBのタイトルとプロパティ構造（スキーマ）をGeminiに教える
-    2. ユーザーの質問から、GeminiにNotion APIクエリ（JSON）を自律生成させる
-    3. 生成されたクエリをNotionに投げてピンポイントでデータを取得する
+    gemini-3.6-flash を使用して動的にNotionクエリを生成・実行する
     """
     if not NOTION_DATABASE_IDS:
         return "参照可能なデータベースが設定されていません。"
@@ -156,24 +147,19 @@ def dynamic_search_and_fetch(user_message):
         }
 
     prompt = (
-        "あなたはNotionのデータベース検索・クエリ生成のエキスパートです。"
-        "以下の『利用可能なDB構造』と『ユーザーの質問』を分析し、Notion APIのデータベースクエリ（/v1/databases/{database_id}/query）に送信するJSONペイロードを一つだけ正確に出力してください。\n\n"
-        "【重要要件】\n"
-        "- 出力は必ず以下のJSONフォーマット（キーに 'database_id' を含むこと）にし、それ以外のテキストや解説は一切書かないでください。\n"
-        "- コードブロック（```json ... ```）で囲んで出力してください。\n\n"
+        "あなたはNotionのデータベース検索・クエリ生成エキスパートです。"
+        "以下の『利用可能なDB構造』と『ユーザーの質問』を分析し、Notion APIのクエリ用JSONを一つだけ出力してください。\n"
+        "出力は必ずコードブロック（```json ... ```）形式で行い、余計な文字は一切含めないでください。\n\n"
         "【JSONフォーマット例】\n"
         "{\n"
-        '  "database_id": "ここに選択したDBの32桁IDを入れる",\n'
-        '  "filter": { ... },\n'
-        '  "sorts": [ { "property": "...", "direction": "descending" } ],\n'
+        '  "database_id": "対象DBの32桁ID",\n'
         '  "page_size": 5\n'
         "}\n\n"
-        f"【利用可能なDB構造】\n{json.dumps(db_schemas, ensure_ascii=False, indent=2)}\n\n"
+        f"【利用可能なDB構造】\n{json.dumps(db_schemas, ensure_ascii=False)}\n\n"
         f"【ユーザーの質問】\n{user_message}"
     )
 
     try:
-        # Geminiにクエリの組み立てを依頼
         res = client.models.generate_content(
             model='gemini-3.6-flash',
             contents=prompt,
@@ -193,20 +179,18 @@ def dynamic_search_and_fetch(user_message):
         if not target_db_id:
             return "対象のデータベースを特定できませんでした。"
 
-        # Notion APIへクエリを送信
         headers = {
             "Authorization": f"Bearer {NOTION_API_KEY}",
             "Notion-Version": "2022-06-28",
             "Content-Type": "application/json"
         }
         query_url = f"https://api.notion.com/v1/databases/{target_db_id}/query"
-        response = requests.post(query_url, headers=headers, json=query_data)
+        response = requests.post(query_url, headers=headers, json=query_data, timeout=5)
 
         if response.status_code == 200:
             results = response.json().get("results", [])
             db_title = get_database_title(target_db_id)
             
-            # 取得したデータをシンプルなテキストにパースして返す
             context_lines = [f"\n--- データベース: {db_title} (検索結果) ---"]
             for page in results:
                 props = page.get("properties", {})
@@ -244,15 +228,14 @@ def dynamic_search_and_fetch(user_message):
 
 
 def generate_gemini_response(user_message, notion_context):
-    """Google GenAI SDK を使用してNotionデータを元に応答を生成"""
+    """gemini-3.6-flash を使用して応答を生成"""
     try:
-        # 動的検索を実行して最新のコンテキストを取得
         dynamic_context = dynamic_search_and_fetch(user_message)
 
         prompt = (
-            "あなたはユーザーのNotionデータを管理・参照する優秀なパーソナルアシスタントです。"
-            "以下のNotionから取得した検索結果情報を参考にして、ユーザーからの質問に日本語で簡潔かつ正確に答えてください。\n\n"
-            f"【Notion検索結果データ】\n{dynamic_context}\n\n"
+            "あなたはユーザーのNotionデータを管理・参照するパーソナルアシスタントです。"
+            "以下のNotion検索結果を参考にして、ユーザーの質問に日本語で簡潔に答えてください。\n\n"
+            f"【Notion検索結果】\n{dynamic_context}\n\n"
             f"【ユーザーからの質問】\n{user_message}"
         )
 
