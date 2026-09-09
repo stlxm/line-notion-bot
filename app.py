@@ -27,6 +27,7 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 NOTION_PAGE_URL = os.environ.get("NOTION_PAGE_URL", "")
 NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 NOTION_KAKEIBO_DATABASE_ID = os.environ.get("NOTION_KAKEIBO_DATABASE_ID", "")
+ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "") # 毎月1日通知を送る相手のLINEユーザID（オプション）
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -52,9 +53,25 @@ def callback():
 
 @app.route("/api/register-fixed", methods=["POST"])
 def api_register_fixed():
-    """GAS等からの毎月1日自動実行用API"""
+    """GAS等からの毎月1日自動実行用API（固定費登録）"""
     count, total = kakeibo.register_monthly_fixed_expenses()
     return json.dumps({"status": "success", "count": count, "total": total}), 200
+
+
+@app.route("/api/monthly-notice", methods=["POST"])
+def api_monthly_notice():
+    """GASからの毎月1日朝6時実行用API（予算設定アナウンス送信）"""
+    if ADMIN_USER_ID:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            flex_msg = kakeibo.create_monthly_budget_prompt_flex()
+            line_bot_api.push_message(
+                PushMessageRequest(
+                    to=ADMIN_USER_ID,
+                    messages=[flex_msg]
+                )
+            )
+    return json.dumps({"status": "success", "message": "Monthly notice triggered"}), 200
 
 
 def reply_line(reply_token, messages):
@@ -81,7 +98,6 @@ def reply_line(reply_token, messages):
 
 
 def start_manual_kakeibo(user_id, reply_token, text):
-    # 全角スペースを半角に置換
     parts = text.replace(" ", " ").strip().split()
     if len(parts) < 2:
         reply_line(reply_token, "形式が正しくありません。\n【入力例】\n支出 1200 ラーメン")
@@ -153,6 +169,14 @@ def handle_postback(event):
         if user_id in user_states:
             del user_states[user_id]
         reply_line(event.reply_token, "操作をキャンセルしました。")
+        return
+
+    # 毎月1日予算設定：「設定する」選択時
+    if action == "start_monthly_budget_input":
+        user_states[user_id] = {
+            "step": "WAITING_MONTHLY_BUDGET"
+        }
+        reply_line(event.reply_token, "今月の全体予算を入力して送信してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
         return
 
     # カード通知：そのままジャンル選択へ進む場合
@@ -240,7 +264,7 @@ def handle_message(event):
     user_id = event.source.user_id
     user_message = event.message.text.strip()
 
-    # 1. 機能選択メニューの表示（「メニュー」「機能」などで反応）
+    # 1. 機能選択メニューの表示
     if user_message in ["メニュー", "機能", "機能一覧", "menu", "Menu"]:
         flex_menu = menu.create_main_menu_flex()
         reply_line(event.reply_token, [flex_menu])
@@ -255,11 +279,10 @@ def handle_message(event):
             reply_line(event.reply_token, [flex_msg])
             return
 
-    # キャンセル処理（対話型ステートの解除）
+    # キャンセル処理
     if user_message == "キャンセル":
         if user_id in user_states:
             state_data = user_states[user_id]
-            # 店名変更待ち状態からのキャンセルの場合
             if state_data.get("step") == "WAITING_STORE_NAME_CHANGE":
                 card = state_data["card"]
                 store = state_data["old_store"]
@@ -288,10 +311,29 @@ def handle_message(event):
         del user_states[user_id]
 
         flex_msg = kakeibo.create_card_notify_flex(card, new_store_name, amount, date_str)
-        reply_line(event.reply_token, [f"店名を「{new_store_name}」に変更しました。", flex_msg])
+        reply_line(event.reply_token, [TextMessage(text=f"店名を「{new_store_name}」に変更しました。"), flex_msg])
         return
 
-    # 3. メモ追加（例: メモ 買い物リスト）
+    # 対話型ステート処理（毎月1日の全体予算入力待ち）
+    if user_id in user_states and user_states[user_id].get("step") == "WAITING_MONTHLY_BUDGET":
+        if user_message.isdigit():
+            budget_amount = int(user_message)
+            jst = timezone(timedelta(hours=+9), "JST")
+            target_month = datetime.now(jst).strftime("%Y-%m")
+
+            success = kakeibo.set_budget_in_notion(target_month, budget_amount, category=None)
+            del user_states[user_id]
+
+            if success:
+                reply_line(event.reply_token, f"設定完了！\n{target_month} の全体予算を ¥{budget_amount:,} に設定しました。")
+            else:
+                reply_line(event.reply_token, "予算の保存に失敗しました。Notionの月別管理DBを確認してください。")
+            return
+        else:
+            reply_line(event.reply_token, "金額は半角の数字のみで入力してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
+            return
+
+    # 3. メモ追加
     if user_message.startswith("メモ ") or user_message.startswith("メモ "):
         memo_text = user_message[3:].strip()
         if memo_text:
@@ -299,7 +341,7 @@ def handle_message(event):
             reply_line(event.reply_token, res_text)
             return
 
-    # 4. メモ一覧の確認
+    # 4. メモ一覧
     if user_message in ["メモ一覧", "メモ確認"]:
         memos = memo.get_memos_from_notion()
         if not memos:
@@ -312,7 +354,7 @@ def handle_message(event):
             reply_line(event.reply_token, "\n".join(lines))
         return
 
-    # 5. メモ削除（ボタン選択UI）
+    # 5. メモ削除
     if user_message in ["メモ削除", "メモ 削除", "メモ 削除"]:
         flex_msg = memo.create_memo_delete_flex()
         if flex_msg:
@@ -357,7 +399,7 @@ def handle_message(event):
         reply_line(event.reply_token, reply_text)
         return
 
-    # 7. 固定費追加コマンド
+    # 7. 固定費追加
     if user_message.startswith("固定費追加"):
         parts = user_message.replace(" ", " ").split()
         if len(parts) >= 3 and parts[2].isdigit():
