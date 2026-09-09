@@ -91,7 +91,86 @@ def create_button_grid_flex(title, options, callback_action, include_cancel=Fals
     return FlexMessage(alt_text=title, contents=FlexContainer.from_json(json.dumps(flex_json)))
 
 
+def create_card_notify_action_flex(card_name, store_name, amount, date_str):
+    """カード利用検知時：そのままジャンル選択へ進むか、店名を変更するかを選択するメッセージ"""
+    flex_json = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": "💳 カード利用検知", "weight": "bold", "color": "#1DB446", "size": "sm"},
+                {"type": "text", "text": f"¥{int(float(amount)):,}", "weight": "bold", "size": "xxl", "margin": "md"}
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "baseline",
+                    "contents": [
+                        {"type": "text", "text": "利用先", "color": "#aaaaaa", "size": "sm", "flex": 2},
+                        {"type": "text", "text": store_name, "weight": "bold", "color": "#666666", "size": "sm", "flex": 5}
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "baseline",
+                    "contents": [
+                        {"type": "text", "text": "カード", "color": "#aaaaaa", "size": "sm", "flex": 2},
+                        {"type": "text", "text": card_name, "color": "#666666", "size": "sm", "flex": 5}
+                    ],
+                    "margin": "xs"
+                },
+                {"type": "separator", "margin": "lg"},
+                {"type": "text", "text": "店名を変更しますか？", "size": "xs", "color": "#888888", "margin": "lg", "align": "center"}
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "そのままジャンル選択へ",
+                        "data": f"action=card_select_cat&card={card_name}&store={store_name}&amount={amount}&date={date_str}"
+                    }
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "店名を変更する",
+                        "data": f"action=card_change_store_start&card={card_name}&store={store_name}&amount={amount}&date={date_str}"
+                    }
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "登録しない",
+                        "data": "action=cancel_registration"
+                    }
+                }
+            ]
+        }
+    }
+    return FlexMessage(alt_text=f"カード利用: {store_name} ¥{amount}", contents=FlexContainer.from_json(json.dumps(flex_json)))
+
+
 def create_card_notify_flex(card_name, store_name, amount, date_str):
+    """ジャンル選択ボタン画面を表示するメッセージ"""
     categories = get_notion_select_options(NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=EXCLUDED_GENRES)
     if not categories:
         categories = ["食費", "日用品", "交通費", "娯楽"]
