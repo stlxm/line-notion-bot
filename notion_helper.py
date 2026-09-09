@@ -131,7 +131,7 @@ def fetch_notion_context():
 
 def dynamic_search_and_fetch(user_message):
     """
-    gemini-3.6-flash を使用して動的にNotionクエリを生成・実行する
+    gemini-2.5-flash を使用して動的にNotionクエリを生成・実行する
     """
     if not NOTION_DATABASE_IDS:
         return "参照可能なデータベースが設定されていません。"
@@ -161,7 +161,7 @@ def dynamic_search_and_fetch(user_message):
 
     try:
         res = client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-2.5-flash',
             contents=prompt,
         )
         
@@ -228,7 +228,7 @@ def dynamic_search_and_fetch(user_message):
 
 
 def generate_gemini_response(user_message, notion_context):
-    """gemini-3.6-flash を使用して応答を生成"""
+    """gemini-2.5-flash を使用して応答を生成"""
     try:
         dynamic_context = dynamic_search_and_fetch(user_message)
 
@@ -240,7 +240,7 @@ def generate_gemini_response(user_message, notion_context):
         )
 
         response = client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-2.5-flash',
             contents=prompt,
         )
         return response.text
