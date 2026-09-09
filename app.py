@@ -58,9 +58,18 @@ def api_register_fixed():
 
 
 def reply_line(reply_token, messages):
-    """LINEにメッセージを送信（文字列またはMessageオブジェクトのリストに対応）"""
+    """LINEにメッセージを送信（文字列、Messageオブジェクト、およびそれらの混在リストに対応）"""
     if isinstance(messages, str):
         messages = [TextMessage(text=messages)]
+    elif isinstance(messages, list):
+        formatted_messages = []
+        for msg in messages:
+            if isinstance(msg, str):
+                formatted_messages.append(TextMessage(text=msg))
+            else:
+                formatted_messages.append(msg)
+        messages = formatted_messages
+
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message(
@@ -72,7 +81,8 @@ def reply_line(reply_token, messages):
 
 
 def start_manual_kakeibo(user_id, reply_token, text):
-    parts = text.strip().split()
+    # 全角スペースを半角に置換
+    parts = text.replace(" ", " ").strip().split()
     if len(parts) < 2:
         reply_line(reply_token, "形式が正しくありません。\n【入力例】\n支出 1200 ラーメン")
         return
@@ -282,7 +292,7 @@ def handle_message(event):
         return
 
     # 3. メモ追加（例: メモ 買い物リスト）
-    if user_message.startswith("メモ "):
+    if user_message.startswith("メモ ") or user_message.startswith("メモ "):
         memo_text = user_message[3:].strip()
         if memo_text:
             res_text = memo.add_memo_to_notion(memo_text)
@@ -303,7 +313,7 @@ def handle_message(event):
         return
 
     # 5. メモ削除（ボタン選択UI）
-    if user_message in ["メモ削除", "メモ 削除"]:
+    if user_message in ["メモ削除", "メモ 削除", "メモ 削除"]:
         flex_msg = memo.create_memo_delete_flex()
         if flex_msg:
             reply_line(event.reply_token, [flex_msg])
@@ -313,7 +323,7 @@ def handle_message(event):
 
     # 6. 予算設定コマンド
     if user_message.startswith("予算"):
-        parts = user_message.split()
+        parts = user_message.replace(" ", " ").split()
         jst = timezone(timedelta(hours=+9), "JST")
         current_month = datetime.now(jst).strftime("%Y-%m")
         target_month = current_month
@@ -349,7 +359,7 @@ def handle_message(event):
 
     # 7. 固定費追加コマンド
     if user_message.startswith("固定費追加"):
-        parts = user_message.split()
+        parts = user_message.replace(" ", " ").split()
         if len(parts) >= 3 and parts[2].isdigit():
             store_name = parts[1]
             amount = float(parts[2])
@@ -379,7 +389,7 @@ def handle_message(event):
         return
 
     # 8. 固定費一括登録
-    if user_message in ["固定費", "固定費登録", "固定費 登録"]:
+    if user_message in ["固定費", "固定費登録", "固定費 登録", "固定費 登録"]:
         count, total = kakeibo.register_monthly_fixed_expenses()
         jst = timezone(timedelta(hours=+9), "JST")
         today_month = datetime.now(jst).strftime("%Y-%m")
