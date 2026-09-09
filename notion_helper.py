@@ -7,6 +7,7 @@ NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 NOTION_URL_DATABASE_ID = os.environ.get("NOTION_URL_DATABASE_ID", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+
 # Gemini APIの初期化
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
