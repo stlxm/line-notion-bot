@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from google import genai
 
@@ -32,7 +33,7 @@ def get_database_title(database_id):
 
 
 def get_database_properties(database_id):
-    """データベースのプロパティ構造を取得する（手動データ追加用）"""
+    """データベースのプロパティ構造を取得する"""
     if not database_id:
         return []
     url = f"https://api.notion.com/v1/databases/{database_id}"
@@ -131,82 +132,127 @@ def add_url_to_notion(url_text):
 
 
 def fetch_notion_context():
+    """互換性維持のためのダミー（実際には使われず、dynamic_searchが処理します）"""
+    return ""
+
+
+def dynamic_search_and_fetch(user_message):
     """
-    app.py側の変更を不要にするため、関数名を従来のまま維持しつつ、
-    タイトルカタログを見て必要なDBだけをピンポイント取得するスマート検索を行います。
+    1. 接続されている全DBのタイトルとプロパティ構造（スキーマ）をGeminiに教える
+    2. ユーザーの質問から、GeminiにNotion APIクエリ（JSON）を自律生成させる
+    3. 生成されたクエリをNotionに投げてピンポイントでデータを取得する
     """
-    # app.py側からは引数を受け取れないため、環境変数や直近のメッセージがない場合は全カタログを軽量取得
     if not NOTION_DATABASE_IDS:
         return "参照可能なデータベースが設定されていません。"
 
     db_id_list = [db_id.strip() for db_id in NOTION_DATABASE_IDS.split(",") if db_id.strip()]
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
-    }
-
-    context_lines = []
-    total_chars = 0
-    MAX_CHARS = 4000
-
+    db_schemas = {}
     for db_id in db_id_list:
-        db_title = get_database_title(db_id)
-        query_url = f"https://api.notion.com/v1/databases/{db_id}/query"
-        try:
-            # 取得件数を最大10件に制限してタイムアウトを完全防止
-            res = requests.post(query_url, headers=headers, json={"page_size": 10})
-            if res.status_code == 200:
-                results = res.json().get("results", [])
-                context_lines.append(f"\n--- データベース: {db_title} ---")
-                
-                for page in results:
-                    props = page.get("properties", {})
-                    row_parts = []
-                    for prop_name, prop_val in props.items():
-                        v_type = prop_val.get("type")
-                        val_str = ""
-                        if v_type == "title":
-                            t_list = prop_val.get("title", [])
-                            if t_list:
-                                val_str = t_list[0].get("plain_text", "")
-                        elif v_type == "rich_text":
-                            r_list = prop_val.get("rich_text", [])
-                            if r_list:
-                                val_str = r_list[0].get("plain_text", "")
-                        elif v_type == "number":
-                            val_str = str(prop_val.get("number", ""))
-                        elif v_type == "select":
-                            sel = prop_val.get("select")
-                            if sel:
-                                val_str = sel.get("name", "")
-                        elif v_type == "date":
-                            date_obj = prop_val.get("date")
-                            if date_obj:
-                                val_str = date_obj.get("start", "")
+        title = get_database_title(db_id)
+        props = get_database_properties(db_id)
+        db_schemas[title] = {
+            "database_id": db_id,
+            "properties": {name: p_type for name, p_type in props}
+        }
 
-                        if val_str:
-                            row_parts.append(f"{prop_name}: {val_str}")
+    prompt = (
+        "あなたはNotionのデータベース検索・クエリ生成のエキスパートです。"
+        "以下の『利用可能なDB構造』と『ユーザーの質問』を分析し、Notion APIのデータベースクエリ（/v1/databases/{database_id}/query）に送信するJSONペイロードを一つだけ正確に出力してください。\n\n"
+        "【重要要件】\n"
+        "- 出力は必ず以下のJSONフォーマット（キーに 'database_id' を含むこと）にし、それ以外のテキストや解説は一切書かないでください。\n"
+        "- コードブロック（```json ... ```）で囲んで出力してください。\n\n"
+        "【JSONフォーマット例】\n"
+        "{\n"
+        '  "database_id": "ここに選択したDBの32桁IDを入れる",\n'
+        '  "filter": { ... },\n'
+        '  "sorts": [ { "property": "...", "direction": "descending" } ],\n'
+        '  "page_size": 5\n'
+        "}\n\n"
+        f"【利用可能なDB構造】\n{json.dumps(db_schemas, ensure_ascii=False, indent=2)}\n\n"
+        f"【ユーザーの質問】\n{user_message}"
+    )
 
-                    if row_parts:
-                        line = " | ".join(row_parts)
-                        if total_chars + len(line) > MAX_CHARS:
-                            break
-                        context_lines.append(line)
-                        total_chars += len(line)
-        except Exception as e:
-            print(f"DBデータ取得エラー ({db_id}): {e}")
+    try:
+        # Geminiにクエリの組み立てを依頼
+        res = client.models.generate_content(
+            model='gemini-3.6-flash',
+            contents=prompt,
+        )
+        
+        text_resp = res.text
+        if "```json" in text_resp:
+            json_str = text_resp.split("```json")[1].split("```")[0].strip()
+        elif "```" in text_resp:
+            json_str = text_resp.split("```")[1].split("```")[0].strip()
+        else:
+            json_str = text_resp.strip()
 
-    return "\n".join(context_lines)
+        query_data = json.loads(json_str)
+        target_db_id = query_data.pop("database_id", None)
+
+        if not target_db_id:
+            return "対象のデータベースを特定できませんでした。"
+
+        # Notion APIへクエリを送信
+        headers = {
+            "Authorization": f"Bearer {NOTION_API_KEY}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json"
+        }
+        query_url = f"https://api.notion.com/v1/databases/{target_db_id}/query"
+        response = requests.post(query_url, headers=headers, json=query_data)
+
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            db_title = get_database_title(target_db_id)
+            
+            # 取得したデータをシンプルなテキストにパースして返す
+            context_lines = [f"\n--- データベース: {db_title} (検索結果) ---"]
+            for page in results:
+                props = page.get("properties", {})
+                row_parts = []
+                for prop_name, prop_val in props.items():
+                    v_type = prop_val.get("type")
+                    val_str = ""
+                    if v_type == "title":
+                        t_list = prop_val.get("title", [])
+                        if t_list: val_str = t_list[0].get("plain_text", "")
+                    elif v_type == "rich_text":
+                        r_list = prop_val.get("rich_text", [])
+                        if r_list: val_str = r_list[0].get("plain_text", "")
+                    elif v_type == "number":
+                        val_str = str(prop_val.get("number", ""))
+                    elif v_type == "select":
+                        sel = prop_val.get("select")
+                        if sel: val_str = sel.get("name", "")
+                    elif v_type == "date":
+                        date_obj = prop_val.get("date")
+                        if date_obj: val_str = date_obj.get("start", "")
+
+                    if val_str:
+                        row_parts.append(f"{prop_name}: {val_str}")
+                if row_parts:
+                    context_lines.append(" | ".join(row_parts))
+            
+            return "\n".join(context_lines)
+        else:
+            return f"Notion検索エラー: {response.text}"
+
+    except Exception as e:
+        print(f"動的検索処理エラー: {e}")
+        return f"検索処理中にエラーが発生しました: {str(e)}"
 
 
 def generate_gemini_response(user_message, notion_context):
-    """Google GenAI SDK を使用してNotionデータを元に応答を生成（gemini-3.6-flash使用）"""
+    """Google GenAI SDK を使用してNotionデータを元に応答を生成"""
     try:
+        # 動的検索を実行して最新のコンテキストを取得
+        dynamic_context = dynamic_search_and_fetch(user_message)
+
         prompt = (
-            "あなたはユーザーのNotionデータを管理・参照するパーソナルアシスタントです。"
-            "以下のNotionから取得したコンテキスト情報を参考にして、ユーザーからの質問に日本語で簡潔かつ正確に答えてください。\n\n"
-            f"【Notionコンテキスト情報】\n{notion_context}\n\n"
+            "あなたはユーザーのNotionデータを管理・参照する優秀なパーソナルアシスタントです。"
+            "以下のNotionから取得した検索結果情報を参考にして、ユーザーからの質問に日本語で簡潔かつ正確に答えてください。\n\n"
+            f"【Notion検索結果データ】\n{dynamic_context}\n\n"
             f"【ユーザーからの質問】\n{user_message}"
         )
 
