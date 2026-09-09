@@ -3,3 +3,4 @@ requests
 google-genai
 line-bot-sdk
 gunicorn
+google-generativeai
