@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import requests
 from datetime import datetime
@@ -416,6 +417,10 @@ def get_budget_status(date_str, current_category):
 def save_kakeibo_to_notion(card_name, store_name, amount, date_str, category):
     if not NOTION_KAKEIBO_DATABASE_ID:
         return "家計簿DB IDが設定されていません。"
+
+    # 日付の余計な空白や特殊文字を完全に除去してクレンジング
+    if date_str:
+        date_str = re.sub(r'[^\d\-]', '', str(date_str)).strip()
 
     url = "https://api.notion.com/v1/pages"
     headers = {
