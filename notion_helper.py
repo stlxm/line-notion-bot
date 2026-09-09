@@ -2,6 +2,7 @@ import os
 import json
 import time
 import requests
+from datetime import datetime, timezone, timedelta
 from google import genai
 
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
@@ -9,12 +10,10 @@ NOTION_URL_DATABASE_ID = os.environ.get("NOTION_URL_DATABASE_ID", "")
 NOTION_MEMO_DATABASE_ID = os.environ.get("NOTION_MEMO_DATABASE_ID", "")
 NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 
-# Google GenAI クライアントの初期化
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 
 def call_gemini_with_retry(model_name, prompt, max_retries=3, initial_delay=2):
-    """503エラー等の高負荷時に自動リトライを行うヘルパー関数"""
     delay = initial_delay
     for attempt in range(max_retries):
         try:
@@ -24,19 +23,15 @@ def call_gemini_with_retry(model_name, prompt, max_retries=3, initial_delay=2):
             )
         except Exception as e:
             err_str = str(e)
-            # 503 (UNAVAILABLE) または一時的な混雑エラーの場合のみリトライ
             if "503" in err_str or "UNAVAILABLE" in err_str or "high demand" in err_str:
                 if attempt < max_retries - 1:
-                    print(f"Gemini混雑エラー (試行 {attempt + 1}/{max_retries}): {e}. {delay}秒後に再試行します...")
                     time.sleep(delay)
-                    delay *= 2  # 待ち時間を倍増させる
+                    delay *= 2
                     continue
-            # その他のエラーやリトライ回数上限に達した場合はそのまま例外を発生させる
             raise e
 
 
 def get_database_title(database_id):
-    """Notionデータベースのタイトルを取得する"""
     if not database_id:
         return "無題のデータベース"
     url = f"https://api.notion.com/v1/databases/{database_id}"
@@ -56,7 +51,6 @@ def get_database_title(database_id):
 
 
 def get_database_properties(database_id):
-    """データベースのプロパティ構造を取得する"""
     if not database_id:
         return []
     url = f"https://api.notion.com/v1/databases/{database_id}"
@@ -80,7 +74,6 @@ def get_database_properties(database_id):
 
 
 def create_notion_page(database_id, collected_data, prop_types):
-    """対話型データ追加で収集した内容をNotionページとして作成する"""
     if not database_id:
         return False
 
@@ -124,7 +117,6 @@ def create_notion_page(database_id, collected_data, prop_types):
 
 
 def add_url_to_notion(url_text):
-    """送信されたURLを後で見るURLデータベースに保存する"""
     if NOTION_URL_DATABASE_ID:
         notion_url = "https://api.notion.com/v1/pages"
         headers = {
@@ -148,14 +140,10 @@ def add_url_to_notion(url_text):
 
 
 def fetch_notion_context():
-    """互換性維持のためのダミー"""
     return ""
 
 
 def dynamic_search_and_fetch(user_message):
-    """
-    gemini-3.6-flash を使用して動的にNotionクエリを生成・実行する（リトライ機能付き）
-    """
     if not NOTION_DATABASE_IDS:
         return "参照可能なデータベースが設定されていません。"
 
@@ -170,13 +158,15 @@ def dynamic_search_and_fetch(user_message):
         }
 
     prompt = (
-        "あなたはNotionのデータベース検索・クエリ生成エキスパートです。"
-        "以下の『利用可能なDB構造』と『ユーザーの質問』を分析し、Notion APIのクエリ用JSONを一つだけ出力してください。\n"
-        "出力は必ずコードブロック（```json ... ```）形式で行い、余計な文字は一切含めないでください。\n\n"
+        "あなたはNotionデータベースの分析アシスタントです。"
+        "以下の『利用可能なDB構造』と『ユーザーの質問』を分析し、どのデータベースを使うべきか、および検索意図を判定してください。\n"
+        "出力は必ず以下のJSONフォーマットにし、コードブロック（```json ... ```）で囲んでください。\n\n"
         "【JSONフォーマット例】\n"
         "{\n"
         '  "database_id": "対象DBの32桁ID",\n'
-        '  "page_size": 5\n'
+        '  "target_property": "日付が入っているプロパティ名、または金額等のプロパティ名（不明なら空文字）",\n'
+        '  "filter_type": "none または this_month 等のキーワード",\n'
+        '  "page_size": 20\n'
         "}\n\n"
         f"【利用可能なDB構造】\n{json.dumps(db_schemas, ensure_ascii=False)}\n\n"
         f"【ユーザーの質問】\n{user_message}"
@@ -184,7 +174,6 @@ def dynamic_search_and_fetch(user_message):
 
     try:
         res = call_gemini_with_retry('gemini-3.6-flash', prompt)
-        
         text_resp = res.text
         if "```json" in text_resp:
             json_str = text_resp.split("```json")[1].split("```")[0].strip()
@@ -193,11 +182,36 @@ def dynamic_search_and_fetch(user_message):
         else:
             json_str = text_resp.strip()
 
-        query_data = json.loads(json_str)
-        target_db_id = query_data.pop("database_id", None)
+        parsed = json.loads(json_str)
+        target_db_id = parsed.get("database_id")
+        page_size = parsed.get("page_size", 20)
 
         if not target_db_id:
             return "対象のデータベースを特定できませんでした。"
+
+        # 安全なNotionクエリペイロードの構築
+        query_data = {"page_size": page_size}
+        
+        # もし「今月」などの意図が含まれている場合、Python側で正確な日付フィルターを付与する
+        if "今月" in user_message or parsed.get("filter_type") == "this_month":
+            jst = timezone(timedelta(hours=+9), "JST")
+            now = datetime.now(jst)
+            start_date = now.strftime("%Y-%m-01")
+            # 日付プロパティを探して安全にフィルタを組む
+            props = db_schemas.get(get_database_title(target_db_id), {}).get("properties", {})
+            date_prop_name = None
+            for p_name, p_type in props.items():
+                if p_type == "date":
+                    date_prop_name = p_name
+                    break
+            
+            if date_prop_name:
+                query_data["filter"] = {
+                    "property": date_prop_name,
+                    "date": {
+                        "on_or_after": start_date
+                    }
+                }
 
         headers = {
             "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -211,7 +225,7 @@ def dynamic_search_and_fetch(user_message):
             results = response.json().get("results", [])
             db_title = get_database_title(target_db_id)
             
-            context_lines = [f"\n--- データベース: {db_title} (検索結果) ---"]
+            context_lines = [f"\n--- データベース: {db_title} (検索結果: {len(results)}件) ---"]
             for page in results:
                 props = page.get("properties", {})
                 row_parts = []
@@ -248,13 +262,12 @@ def dynamic_search_and_fetch(user_message):
 
 
 def generate_gemini_response(user_message, notion_context):
-    """gemini-3.6-flash を使用して応答を生成（リトライ機能付き）"""
     try:
         dynamic_context = dynamic_search_and_fetch(user_message)
 
         prompt = (
             "あなたはユーザーのNotionデータを管理・参照するパーソナルアシスタントです。"
-            "以下のNotion検索結果を参考にして、ユーザーの質問に日本語で簡潔に答えてください。\n\n"
+            "以下のNotion検索結果を参考にして、ユーザーからの質問に日本語で簡潔かつ正確に答えてください。\n\n"
             f"【Notion検索結果】\n{dynamic_context}\n\n"
             f"【ユーザーからの質問】\n{user_message}"
         )
