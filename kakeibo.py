@@ -91,8 +91,50 @@ def create_button_grid_flex(title, options, callback_action, include_cancel=Fals
     return FlexMessage(alt_text=title, contents=FlexContainer.from_json(json.dumps(flex_json)))
 
 
+def create_monthly_budget_prompt_flex():
+    """毎月1日の朝6時に送信する全体予算設定の確認Flex Message"""
+    flex_json = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": "📅 毎月の予算設定", "weight": "bold", "color": "#1DB446", "size": "sm"},
+                {"type": "text", "text": "今月の全体予算を設定しますか？", "weight": "bold", "size": "md", "margin": "md"}
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "設定する",
+                        "data": "action=start_monthly_budget_input"
+                    }
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "後でする",
+                        "data": "action=cancel_registration"
+                    }
+                }
+            ]
+        }
+    }
+    return FlexMessage(alt_text="今月の予算を設定しますか？", contents=FlexContainer.from_json(json.dumps(flex_json)))
+
+
 def create_card_notify_action_flex(card_name, store_name, amount, date_str):
-    """カード利用検知時：そのままジャンル選択へ進むか、店名を変更するかを選択するメッセージ"""
     flex_json = {
         "type": "bubble",
         "header": {
@@ -170,7 +212,6 @@ def create_card_notify_action_flex(card_name, store_name, amount, date_str):
 
 
 def create_card_notify_flex(card_name, store_name, amount, date_str):
-    """ジャンル選択ボタン画面を表示するメッセージ"""
     categories = get_notion_select_options(NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=EXCLUDED_GENRES)
     if not categories:
         categories = ["食費", "日用品", "交通費", "娯楽"]
@@ -482,7 +523,6 @@ def register_monthly_fixed_expenses():
 
 
 def add_fixed_expense_to_notion(store_name, amount, category="固定費", card_name="現金"):
-    """Notionの固定費マスタDBへ新しい固定費を1件追加します"""
     if not NOTION_FIXED_DATABASE_ID:
         return False
 
