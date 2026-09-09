@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 from google import genai
 
@@ -10,6 +11,28 @@ NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 
 # Google GenAI クライアントの初期化
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+
+
+def call_gemini_with_retry(model_name, prompt, max_retries=3, initial_delay=2):
+    """503エラー等の高負荷時に自動リトライを行うヘルパー関数"""
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+        except Exception as e:
+            err_str = str(e)
+            # 503 (UNAVAILABLE) または一時的な混雑エラーの場合のみリトライ
+            if "503" in err_str or "UNAVAILABLE" in err_str or "high demand" in err_str:
+                if attempt < max_retries - 1:
+                    print(f"Gemini混雑エラー (試行 {attempt + 1}/{max_retries}): {e}. {delay}秒後に再試行します...")
+                    time.sleep(delay)
+                    delay *= 2  # 待ち時間を倍増させる
+                    continue
+            # その他のエラーやリトライ回数上限に達した場合はそのまま例外を発生させる
+            raise e
 
 
 def get_database_title(database_id):
@@ -131,7 +154,7 @@ def fetch_notion_context():
 
 def dynamic_search_and_fetch(user_message):
     """
-    gemini-2.5-flash を使用して動的にNotionクエリを生成・実行する
+    gemini-3.6-flash を使用して動的にNotionクエリを生成・実行する（リトライ機能付き）
     """
     if not NOTION_DATABASE_IDS:
         return "参照可能なデータベースが設定されていません。"
@@ -160,10 +183,7 @@ def dynamic_search_and_fetch(user_message):
     )
 
     try:
-        res = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
+        res = call_gemini_with_retry('gemini-3.6-flash', prompt)
         
         text_resp = res.text
         if "```json" in text_resp:
@@ -228,7 +248,7 @@ def dynamic_search_and_fetch(user_message):
 
 
 def generate_gemini_response(user_message, notion_context):
-    """gemini-2.5-flash を使用して応答を生成"""
+    """gemini-3.6-flash を使用して応答を生成（リトライ機能付き）"""
     try:
         dynamic_context = dynamic_search_and_fetch(user_message)
 
@@ -239,10 +259,7 @@ def generate_gemini_response(user_message, notion_context):
             f"【ユーザーからの質問】\n{user_message}"
         )
 
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
+        response = call_gemini_with_retry('gemini-3.6-flash', prompt)
         return response.text
     except Exception as e:
         print(f"Gemini APIエラー: {e}")
