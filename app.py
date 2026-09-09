@@ -176,7 +176,7 @@ def handle_postback(event):
         user_states[user_id] = {
             "step": "WAITING_MONTHLY_BUDGET"
         }
-        reply_line(event.reply_token, "今月の全体予算を入力して送信してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
+        reply_line(event.reply_token, "📅「設定する」を受け付けました。\n今月の全体予算を入力して送信してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
         return
 
     # カード通知：そのままジャンル選択へ進む場合
@@ -187,7 +187,7 @@ def handle_postback(event):
         date_str = params.get("date")
 
         flex_msg = kakeibo.create_card_notify_flex(card, store, amount, date_str)
-        reply_line(event.reply_token, [flex_msg])
+        reply_line(event.reply_token, [TextMessage(text="ジャンル選択へ進みます。"), flex_msg])
         return
 
     # カード通知：店名変更を開始する場合
@@ -201,7 +201,7 @@ def handle_postback(event):
         }
         reply_line(
             event.reply_token,
-            f"新しい利用先・店名を入力して送信してください。\n（現在の仮名称: {params.get('store')}\n※ 変更しない場合は キャンセル と送信してください）"
+            f"✏️「店名を変更する」を受け付けました。\n新しい利用先・店名を入力して送信してください。\n（現在の仮名称: {params.get('store')}）"
         )
         return
 
@@ -225,7 +225,7 @@ def handle_postback(event):
         category = params.get("cat")
 
         res_msg = kakeibo.save_kakeibo_to_notion(card, store, amount, date_str, category)
-        reply_line(event.reply_token, res_msg)
+        reply_line(event.reply_token, [TextMessage(text=f"📌「{category}」を選択しました。保存中..."), TextMessage(text=res_msg)])
         return
 
     # 手動入力ジャンル選択時
@@ -239,7 +239,7 @@ def handle_postback(event):
             cards = ["現金", "JCB", "三井住友カード", "PayPay", "楽天カード"]
 
         flex_msg = kakeibo.create_button_grid_flex("支払方法を選択してください", cards, "manual_card_select", include_cancel=True)
-        reply_line(event.reply_token, [flex_msg])
+        reply_line(event.reply_token, [TextMessage(text=f"📌「{selected_cat}」を選択しました。"), flex_msg])
         return
 
     # 手動入力支払方法選択時
@@ -255,7 +255,7 @@ def handle_postback(event):
             category=state_data["category"]
         )
         del user_states[user_id]
-        reply_line(event.reply_token, res_msg)
+        reply_line(event.reply_token, [TextMessage(text=f"💳「{selected_card}」を選択しました。保存中..."), TextMessage(text=res_msg)])
         return
 
 
