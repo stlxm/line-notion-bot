@@ -2,6 +2,7 @@ import os
 import requests
 from datetime import datetime, timezone, timedelta
 
+import card_rules
 import fixed_rules
 
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
@@ -20,10 +21,6 @@ def _headers():
 
 
 def _get_title_property_name():
-    """未処理DBのTitleプロパティ名を自動検出します。
-
-    推奨名は GmailMessageID ですが、Notion作成直後の「名前」などでも動作します。
-    """
     global _title_property_cache
     if _title_property_cache:
         return _title_property_cache
@@ -32,8 +29,7 @@ def _get_title_property_name():
 
     res = requests.get(
         f"https://api.notion.com/v1/databases/{NOTION_CARD_PENDING_DATABASE_ID}",
-        headers=_headers(),
-        timeout=10,
+        headers=_headers(), timeout=10,
     )
     if res.status_code != 200:
         print(f"カード未処理DBスキーマ取得エラー ({res.status_code}): {res.text}")
@@ -43,20 +39,17 @@ def _get_title_property_name():
     if props.get("GmailMessageID", {}).get("type") == "title":
         _title_property_cache = "GmailMessageID"
         return _title_property_cache
-
     for name, prop in props.items():
         if prop.get("type") == "title":
             _title_property_cache = name
             print(f"[Card Queue] Titleプロパティを自動検出: {name}")
             return _title_property_cache
-
     return None
 
 
 def _query(payload):
     if not NOTION_CARD_PENDING_DATABASE_ID:
         return []
-
     url = f"https://api.notion.com/v1/databases/{NOTION_CARD_PENDING_DATABASE_ID}/query"
     results = []
     body = dict(payload)
@@ -96,26 +89,42 @@ def _page_to_item(page):
     }
 
 
-def enqueue_card(message_id, card, store, amount, date_str):
-    """Gmail Message IDで重複防止しながら未処理カードを保存します。
+def get_matching_pending_items(card, store):
+    """同じカード＋正規化店名の未処理を古い順に返す。"""
+    target_card = str(card or "").strip()
+    target_store = card_rules.normalize_store_name(store)
+    if not target_card or not target_store:
+        return []
+    return [
+        item for item in get_pending_items(limit=1000)
+        if item.get("card", "").strip() == target_card
+        and card_rules.normalize_store_name(item.get("store")) == target_store
+    ]
 
-    固定費DBに同じカード + 正規化店名の有効レコードがある場合は、
-    未処理キューへ追加せず、GASが再通知しないよう通知済み相当で返します。
-    """
+
+def find_pending_transaction(card, store, amount, date_str):
+    """Message IDが違っても同日・同額・同カード・同一店なら既存未処理として照合する。"""
+    target_store = card_rules.normalize_store_name(store)
+    for item in get_matching_pending_items(card, store):
+        if (
+            card_rules.normalize_store_name(item.get("store")) == target_store
+            and float(item.get("amount") or 0) == float(amount)
+            and str(item.get("date", ""))[:10] == str(date_str)[:10]
+        ):
+            return item
+    return None
+
+
+def enqueue_card(message_id, card, store, amount, date_str):
+    """固定費除外・Message ID重複・取引内容照合を通して未処理へ保存する。"""
     if fixed_rules.is_card_detection_excluded(card, store):
         print(f"[Card Queue] 固定費/サブスクのため検出除外: {card} / {store}")
         return {
-            "ok": True,
-            "created": False,
-            "ignored_fixed": True,
+            "ok": True, "created": False, "ignored_fixed": True,
             "item": {
-                "id": f"fixed-excluded:{message_id}",
-                "message_id": str(message_id),
-                "card": str(card),
-                "store": str(store),
-                "amount": float(amount),
-                "date": str(date_str),
-                "notified": True,
+                "id": f"fixed-excluded:{message_id}", "message_id": str(message_id),
+                "card": str(card), "store": str(store), "amount": float(amount),
+                "date": str(date_str), "notified": True,
             },
         }
 
@@ -131,8 +140,12 @@ def enqueue_card(message_id, card, store, amount, date_str):
         "filter": {"property": title_name, "title": {"equals": str(message_id)}},
     })
     if existing:
-        item = _page_to_item(existing[0])
-        return {"ok": True, "created": False, "item": item}
+        return {"ok": True, "created": False, "item": _page_to_item(existing[0]), "duplicate_message": True}
+
+    reconciled = find_pending_transaction(card, store, amount, date_str)
+    if reconciled:
+        print(f"[Card Queue] 別Message IDの同一取引を既存未処理へ照合: {card} / {store} / {amount} / {date_str}")
+        return {"ok": True, "created": False, "item": reconciled, "reconciled_pending": True}
 
     payload = {
         "parent": {"database_id": NOTION_CARD_PENDING_DATABASE_ID},
@@ -151,8 +164,7 @@ def enqueue_card(message_id, card, store, amount, date_str):
         print(f"カード未処理DB作成エラー ({res.status_code}): {res.text}")
         return {"ok": False, "error": res.text[:500]}
 
-    item = _page_to_item(res.json())
-    return {"ok": True, "created": True, "item": item}
+    return {"ok": True, "created": True, "item": _page_to_item(res.json())}
 
 
 def mark_notified(page_id):
@@ -164,14 +176,11 @@ def update_store(page_id, store):
 
 
 def remove(page_id):
-    """処理済み/スキップ済みのキュー項目をNotionでアーカイブして一覧から消します。"""
     if not page_id:
         return False
     res = requests.patch(
-        f"https://api.notion.com/v1/pages/{page_id}",
-        headers=_headers(),
-        json={"archived": True},
-        timeout=10,
+        f"https://api.notion.com/v1/pages/{page_id}", headers=_headers(),
+        json={"archived": True}, timeout=10,
     )
     if res.status_code != 200:
         print(f"カード未処理DBアーカイブエラー ({res.status_code}): {res.text}")
@@ -191,10 +200,8 @@ def _patch(page_id, properties):
     if not page_id:
         return False
     res = requests.patch(
-        f"https://api.notion.com/v1/pages/{page_id}",
-        headers=_headers(),
-        json={"properties": properties},
-        timeout=10,
+        f"https://api.notion.com/v1/pages/{page_id}", headers=_headers(),
+        json={"properties": properties}, timeout=10,
     )
     if res.status_code != 200:
         print(f"カード未処理DB更新エラー ({res.status_code}): {res.text}")
