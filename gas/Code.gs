@@ -7,12 +7,11 @@
 // LINE_CHANNEL_ACCESS_TOKEN はソースコードへ直接書かないでください。
 
 const SEARCH_INTERVAL_MINUTES = 1440; // 24時間
+const GMAIL_SEARCH_DAYS = 2;           // Gmail検索は少し広め。最終判定は上の分数で行う
 const LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push";
+const PROCESSED_IDS_KEY = "PROCESSED_CARD_MESSAGE_IDS";
+const MAX_PROCESSED_IDS = 200;
 
-/**
- * 10分間隔トリガーで実行するメイン関数。
- * Gmailの検索条件は1日分を広めに取得し、msg.getDate()で24時間以内を厳密判定します。
- */
 function checkCardEmails() {
   Logger.log("--- 処理開始 ---");
 
@@ -27,26 +26,37 @@ function checkCardEmails() {
   Logger.log("--- 処理完了 ---");
 }
 
-/**
- * Script Properties から秘密情報を取得します。
- */
 function getLineConfig() {
   const props = PropertiesService.getScriptProperties();
   const userId = props.getProperty("LINE_USER_ID");
   const accessToken = props.getProperty("LINE_CHANNEL_ACCESS_TOKEN");
 
   if (!userId || !accessToken) {
-    throw new Error(
-      "Script Properties に LINE_USER_ID と LINE_CHANNEL_ACCESS_TOKEN を設定してください。"
-    );
+    throw new Error("Script Properties に LINE_USER_ID と LINE_CHANNEL_ACCESS_TOKEN を設定してください。");
   }
 
   return { userId, accessToken };
 }
 
-/**
- * カード利用をLINEへFlex Messageとして直接Pushします。
- */
+function getProcessedMessageIds() {
+  const raw = PropertiesService.getScriptProperties().getProperty(PROCESSED_IDS_KEY);
+  if (!raw) return [];
+  try {
+    const ids = JSON.parse(raw);
+    return Array.isArray(ids) ? ids : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function rememberProcessedMessageId(messageId) {
+  const props = PropertiesService.getScriptProperties();
+  const ids = getProcessedMessageIds().filter(id => id !== messageId);
+  ids.push(messageId);
+  const trimmed = ids.slice(-MAX_PROCESSED_IDS);
+  props.setProperty(PROCESSED_IDS_KEY, JSON.stringify(trimmed));
+}
+
 function sendToLineBot(cardName, storeName, amount, dateStr) {
   Logger.log(`[LINE Flex送信] ${cardName}: ${storeName} - ¥${amount} (${dateStr})`);
 
@@ -151,114 +161,137 @@ function sendToLineBot(cardName, storeName, amount, dateStr) {
   }
 }
 
-/**
- * 検索結果の各メッセージを処理します。
- */
-function processCardThreads(query, cutoff, cardName, amountRegex, storeRegex) {
+function normalizeUsageDate(rawDate, fallbackDate) {
+  if (!rawDate) {
+    return Utilities.formatDate(fallbackDate, "JST", "yyyy-MM-dd");
+  }
+
+  const m = String(rawDate).match(/(20\d{2})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+  if (!m) {
+    return Utilities.formatDate(fallbackDate, "JST", "yyyy-MM-dd");
+  }
+
+  return `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+}
+
+function processCardThreads(query, cutoff, cardName, amountRegex, storeRegex, usageDateRegex) {
   Logger.log(`[${cardName}] Gmail検索: ${query}`);
   const threads = GmailApp.search(query, 0, 20);
   Logger.log(`[${cardName}] ヒットしたスレッド数: ${threads.length}`);
 
+  const processedIds = new Set(getProcessedMessageIds());
   let messageCount = 0;
-  let unreadCount = 0;
-  let inRangeCount = 0;
+  let withinWindowCount = 0;
   let parsedCount = 0;
+  let duplicateCount = 0;
 
   threads.forEach(thread => {
     thread.getMessages().forEach(msg => {
       messageCount++;
-      Logger.log(
-        `[${cardName}] 候補メール: ` +
-        `未読=${msg.isUnread()} / 日時=${msg.getDate()} / ` +
-        `From=${msg.getFrom()} / 件名=${msg.getSubject()}`
-      );
+      const messageId = msg.getId();
 
-      if (!msg.isUnread()) return;
-      unreadCount++;
+      Logger.log(
+        `[${cardName}] 候補メール: 日時=${msg.getDate()} / 既読=${!msg.isUnread()} / From=${msg.getFrom()} / 件名=${msg.getSubject()}`
+      );
 
       if (msg.getDate().getTime() < cutoff.getTime()) {
         Logger.log(`[期間外スキップ] ${cardName}: ${msg.getDate()} / ${msg.getSubject()}`);
         return;
       }
-      inRangeCount++;
+      withinWindowCount++;
+
+      if (processedIds.has(messageId)) {
+        duplicateCount++;
+        Logger.log(`[重複スキップ] ${cardName}: messageId=${messageId}`);
+        return;
+      }
 
       const body = msg.getPlainBody();
       const amountMatch = body.match(amountRegex);
       const storeMatch = body.match(storeRegex);
+      const usageDateMatch = usageDateRegex ? body.match(usageDateRegex) : null;
 
       if (!amountMatch || !storeMatch) {
-        Logger.log(
-          `[解析失敗] ${cardName}: ${msg.getSubject()} / ` +
-          `金額=${amountMatch ? "OK" : "NG"} / 店名=${storeMatch ? "OK" : "NG"}`
-        );
+        Logger.log(`[解析失敗] ${cardName}: ${msg.getSubject()}`);
+        Logger.log(`[解析状態] 金額=${!!amountMatch} / 利用先=${!!storeMatch}`);
         return;
       }
-      parsedCount++;
 
       const amount = amountMatch[1].replace(/,/g, "");
       const store = storeMatch[1].trim();
-      const dateStr = Utilities.formatDate(msg.getDate(), "JST", "yyyy-MM-dd");
+      const dateStr = normalizeUsageDate(usageDateMatch ? usageDateMatch[1] : null, msg.getDate());
+      parsedCount++;
+
+      Logger.log(`[解析成功] ${cardName}: 店名=${store} / 金額=${amount} / 利用日=${dateStr}`);
 
       if (sendToLineBot(cardName, store, amount, dateStr)) {
+        rememberProcessedMessageId(messageId);
+        processedIds.add(messageId);
         msg.markRead();
         Logger.log(`[処理成功] ${cardName}: ${store} ¥${amount}`);
       } else {
-        Logger.log(`[送信失敗・未読維持] ${cardName}: ${store} ¥${amount}`);
+        Logger.log(`[送信失敗・再試行対象] ${cardName}: ${store} ¥${amount}`);
       }
     });
   });
 
   Logger.log(
-    `[${cardName}] 集計: スレッド=${threads.length}, ` +
-    `メール=${messageCount}, 未読=${unreadCount}, ` +
-    `24時間以内=${inRangeCount}, 解析成功=${parsedCount}`
+    `[${cardName}] 集計: スレッド=${threads.length}, メール=${messageCount}, 24時間以内=${withinWindowCount}, 重複=${duplicateCount}, 解析成功=${parsedCount}`
   );
 }
 
 function checkJCB(cutoff) {
   Logger.log("JCBチェック中...");
-  const query = 'from:mail@qa.jcb.co.jp subject:"JCBカード／ショッピングご利用のお知らせ" is:unread newer_than:1d';
+  const query = `from:mail@qa.jcb.co.jp subject:"JCBカード／ショッピングご利用のお知らせ" newer_than:${GMAIL_SEARCH_DAYS}d`;
+
   processCardThreads(
     query,
     cutoff,
     "JCB",
-    /(?:【)?(?:ご利用金額|利用金額)(?:】)?[：:\s ]*([\d,]+)[\s ]*円/,
-    /(?:【)?(?:ご利用先|利用先)(?:】)?[：:\s ]*([^\r\n]+)/
+    /(?:【)?(?:ご利用金額|利用金額)(?:】)?[：:\s　]*([\d,]+)[\s　]*円/,
+    /(?:【)?(?:ご利用先|利用先)(?:】)?[：:\s　]*([^\r\n]+)/,
+    /(?:【)?(?:ご利用日時|利用日時|ご利用日|利用日)(?:\([^\)]*\))?(?:】)?[：:\s　]*((?:20\d{2})[\/\-年]\d{1,2}[\/\-月]\d{1,2})/
   );
 }
 
 function checkSMBC(cutoff) {
   Logger.log("三井住友チェック中...");
-  const query = 'from:statement@vpass.ne.jp subject:"ご利用のお知らせ【三井住友カード】" is:unread newer_than:1d';
+  const query = `from:statement@vpass.ne.jp subject:"ご利用のお知らせ【三井住友カード】" newer_than:${GMAIL_SEARCH_DAYS}d`;
+
   processCardThreads(
     query,
     cutoff,
     "三井住友カード",
-    /(?:◇)?(?:利用金額|ご利用金額)[：:\s ]*([\d,]+)[\s ]*円/,
-    /(?:◇)?(?:利用先|ご利用先|利用店名)[：:\s ]*([^\r\n]+)/
+    /(?:◇)?(?:利用金額|ご利用金額)[：:\s　]*([\d,]+)[\s　]*円/,
+    /(?:◇)?(?:利用先|ご利用先|利用店名)[：:\s　]*([^\r\n]+)/,
+    /(?:◇)?(?:利用日|ご利用日)[：:\s　]*((?:20\d{2})[\/\-年]\d{1,2}[\/\-月]\d{1,2})/
   );
 }
 
 function checkRakuten(cutoff) {
   Logger.log("楽天チェック中...");
-  const query = 'from:info@mail.rakuten-card.co.jp subject:"カード利用のお知らせ(本人ご利用分)" is:unread newer_than:1d';
+  const query = `from:info@mail.rakuten-card.co.jp subject:"カード利用のお知らせ(本人ご利用分)" newer_than:${GMAIL_SEARCH_DAYS}d`;
+
   processCardThreads(
     query,
     cutoff,
     "楽天カード",
-    /(?:■)?(?:利用金額|ご利用金額)[：:\s ]*([\d,]+)[\s ]*円/,
-    /(?:■)?(?:利用先|ご利用先|利用店名)[：:\s ]*([^\r\n]+)/
+    /(?:■)?(?:利用金額|ご利用金額)[：:\s　]*([\d,]+)[\s　]*円/,
+    /(?:■)?(?:利用先|ご利用先|利用店名)[：:\s　]*([^\r\n]+)/,
+    /(?:■)?(?:利用日|ご利用日)[：:\s　]*((?:20\d{2})[\/\-年]\d{1,2}[\/\-月]\d{1,2})/
   );
 }
 
 function checkPayPay(cutoff) {
   Logger.log("PayPayチェック中...");
-  const query = 'subject:"【PayPayカード】ご利用のお知らせ" is:unread newer_than:1d';
+  const query = `subject:"【PayPayカード】ご利用のお知らせ" newer_than:${GMAIL_SEARCH_DAYS}d`;
+
   processCardThreads(
     query,
     cutoff,
     "PayPay",
-    /(?:利用金額|ご利用金額)[：:\s ]*([\d,]+)[\s ]*円/,
-    /(?:利用先|ご利用先)[：:\s ]*([^\r\n]+)/
+    /(?:利用金額|ご利用金額)[：:\s　]*([\d,]+)[\s　]*円/,
+    /(?:利用先|ご利用先)[：:\s　]*([^\r\n]+)/,
+    /(?:利用日|ご利用日)[：:\s　]*((?:20\d{2})[\/\-年]\d{1,2}[\/\-月]\d{1,2})/
   );
 }
