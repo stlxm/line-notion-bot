@@ -30,17 +30,22 @@ function callFinanceEndpoint_(path) {
   return body;
 }
 
-// 1日1回のトリガーを推奨。80%以上の予算があるときだけLINE通知します。
+// 1日1回。80%以上の予算があるときだけLINE通知します。
 function sendDailyBudgetAlert() {
   callFinanceEndpoint_("/api/budget-alert");
 }
 
-// 1日1回のトリガーを推奨。カードのジャンル未選択が残っている時だけ件数を通知します。
+// 1日1回。カードのジャンル未選択が残っている時だけ件数を通知します。
 function sendDailyCardPendingReminder() {
   callFinanceEndpoint_("/api/card-pending-reminder");
 }
 
-// 毎週日曜日など、週1回のトリガーを推奨。
+// 1日1回。Render側で月末か判定し、月末だけ未処理0件/残件数をLINE通知します。
+function sendMonthEndCardCheck() {
+  callFinanceEndpoint_("/api/card-month-end-check");
+}
+
+// 毎週日曜日など、週1回。
 function sendWeeklyFinanceReport() {
   callFinanceEndpoint_("/api/weekly-report");
 }
