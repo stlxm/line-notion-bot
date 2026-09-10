@@ -292,6 +292,17 @@ def _reply_already_processed(reply_token, pending_id=None):
     reply_line(reply_token, messages[:5])
 
 
+def _pending_item_or_reply(reply_token, pending_id):
+    """pending_idから未処理カードの実データを取得します。"""
+    if not pending_id:
+        return None
+    item = card_queue.get_item(pending_id)
+    if not item:
+        _reply_already_processed(reply_token, pending_id)
+        return None
+    return item
+
+
 def _run_ai_search(user_id, reply_token, query):
     """明示的に AI 接頭辞が付いた質問だけ Gemini を呼び出します。"""
     reply_line(reply_token, "🤖 AIで検索・回答を生成しています。完了後にLINEへ送信します。")
@@ -362,31 +373,41 @@ def handle_postback(event):
 
     if action == "card_select_cat":
         pending_id = params.get("pending_id")
-        if pending_id and not _pending_is_active(pending_id):
-            _reply_already_processed(event.reply_token, pending_id)
-            return
+        if pending_id:
+            item = _pending_item_or_reply(event.reply_token, pending_id)
+            if not item:
+                return
+            card, store, amount, date_str = item["card"], item["store"], item["amount"], item["date"]
+        else:
+            card, store, amount, date_str = (
+                params.get("card"), params.get("store"), params.get("amount"), params.get("date")
+            )
         reply_line(event.reply_token, [
             TextMessage(text="ジャンル選択へ進みます。"),
-            _card_category_flex(
-                params.get("card"), params.get("store"), params.get("amount"), params.get("date"), pending_id
-            ),
+            _card_category_flex(card, store, amount, date_str, pending_id),
         ])
         return
 
     if action == "card_change_store_start":
         pending_id = params.get("pending_id")
-        if pending_id and not _pending_is_active(pending_id):
-            _reply_already_processed(event.reply_token, pending_id)
-            return
+        if pending_id:
+            item = _pending_item_or_reply(event.reply_token, pending_id)
+            if not item:
+                return
+            card, old_store, amount, date_str = item["card"], item["store"], item["amount"], item["date"]
+        else:
+            card, old_store, amount, date_str = (
+                params.get("card"), params.get("store"), params.get("amount"), params.get("date")
+            )
         user_states[user_id] = {
             "step": "WAITING_STORE_NAME_CHANGE",
-            "card": params.get("card"),
-            "old_store": params.get("store"),
-            "amount": params.get("amount"),
-            "date": params.get("date"),
+            "card": card,
+            "old_store": old_store,
+            "amount": amount,
+            "date": date_str,
             "pending_id": pending_id,
         }
-        reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n（現在の仮名称: {params.get('store')}）")
+        reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n（現在の仮名称: {old_store}）")
         return
 
     if action == "prepare_delete_memo":
@@ -407,17 +428,21 @@ def handle_postback(event):
 
     if action == "kakeibo_save":
         pending_id = params.get("pending_id")
-        if pending_id and not _pending_is_active(pending_id):
-            _reply_already_processed(event.reply_token, pending_id)
-            return
+        if pending_id:
+            item = _pending_item_or_reply(event.reply_token, pending_id)
+            if not item:
+                return
+            card, store, amount, date_str = item["card"], item["store"], item["amount"], item["date"]
+        else:
+            card, store, amount, date_str = (
+                params.get("card"), params.get("store"), params.get("amount"), params.get("date")
+            )
 
-        res_msg = kakeibo.save_kakeibo_to_notion(
-            params.get("card"), params.get("store"), params.get("amount"),
-            params.get("date"), params.get("cat")
-        )
+        category = params.get("cat")
+        res_msg = kakeibo.save_kakeibo_to_notion(card, store, amount, date_str, category)
         success = res_msg.startswith("家計簿に記録しました！")
         messages = [
-            TextMessage(text=f"📌「{params.get('cat')}」を選択しました。"),
+            TextMessage(text=f"📌「{category}」を選択しました。"),
             TextMessage(text=res_msg),
         ]
 
@@ -828,7 +853,7 @@ def handle_message(event):
         reply_line(reply_token, help_text)
         return
 
-    if user_message in ["AI", "ai", "Ai"]:
+    if user_message.lower() == "ai":
         reply_line(
             reply_token,
             "【AI検索の使い方】\n"
