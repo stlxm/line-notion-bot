@@ -1,262 +1,73 @@
 # LINE Notion Bot
 
-LINE を入口に、**家計簿・予算管理・クレジットカード利用通知・メモ・Notion データ登録・AI検索**をまとめて扱う個人向けアシスタントです。
+LINE を入口に、**家計簿・予算管理・クレジットカード利用通知・メモ・Notion データ登録・AI検索・AI回答改善**をまとめて扱う個人向けアシスタントです。
 
-現在の構成では LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。通常機能はコマンドで動作し、AI は `AI 質問内容` と明示したときだけ起動します。
+現在は LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。通常機能はコマンドで実行し、Gemini は `AI 質問内容` と明示したときだけ使用します。
 
-> 初期構築・環境変数・GAS設定は [SETUP.md](./SETUP.md) を参照してください。
+> 初期構築・環境変数・Notion DB の作成方法は [SETUP.md](./SETUP.md) を参照してください。
 >
-> GAS の詳細は [gas/README.md](./gas/README.md) を参照してください。
+> Google Apps Script の詳細は [gas/README.md](./gas/README.md) も参照してください。
 
 ---
 
-## 1. 重要な操作ルール
+## 1. 基本方針
 
-### 通常機能
+この Bot は次の3系統を明確に分離しています。
 
-家計簿、予算、固定費、メモ、Notion登録などは決められたコマンドで実行します。
+1. **通常コマンド**: 家計簿、予算、メモ、固定費、Notion 登録など。Gemini は使いません。
+2. **AI検索**: `AI ` で始まる質問だけ Gemini を使用します。
+3. **AI改善**: 直前のAI回答が期待と違った場合、`AI改善` で改善内容を Notion に蓄積します。
 
-```text
-メニュー
-今月
-週次レポート
-予算一覧
-メモ一覧
-固定費一覧
-```
-
-### AI検索
-
-Gemini API は通常メッセージでは呼び出しません。
-
-```text
-AI 今月の食費を分析して
-AI 最近の支出傾向を説明して
-AI メモの内容を整理して
-```
-
-`AI` だけ送ると使い方を表示し、APIは消費しません。
-
-### 未登録コマンド
-
-登録されていない文字列は AI に自動転送しません。
+未登録コマンドは Gemini に送らず、
 
 ```text
 そのコマンドはありません。メニューから機能を選んでください。
 ```
 
-と返し、メインメニューを表示します。
+と案内し、メニューを表示します。
 
 ---
 
-## 2. AI検索の現在の設計
+## 2. 主な機能
 
-AI検索は、Gemini無料枠・応答速度・Notion API負荷を抑えるために最適化しています。
-
-### 以前の方式
-
-```text
-AI質問
-  ↓
-Geminiで「どのDBを読むか」を判定  ← Gemini 1回
-  ↓
-Notion検索
-  ↓
-Geminiで回答生成                 ← Gemini 1回
-```
-
-1質問で最大2回Geminiを使うため、API回数を消費しやすい構成でした。
-
-### 現在の方式
-
-```text
-AI質問
-  ↓
-Pythonルーターで関連DBを判定     ← Gemini不使用
-  ↓
-必要な最大2DBだけNotionから取得
-  ↓
-Geminiで最終回答                 ← 原則1回だけ
-```
-
-### DBルーターが見る情報
-
-- 専用DBの用途
-- NotionのDBタイトル
-- プロパティ名
-- プロパティ型
-- 質問中のキーワード
-- 日付表現
-
-例:
-
-```text
-AI 今月の食費はいくら？
-```
-
-→ 家計簿DBを優先
-
-```text
-AI 予算あとどれくらい？
-```
-
-→ 月別管理DBと家計簿DBを優先
-
-```text
-AI 保存してあるメモを整理して
-```
-
-→ メモDBを優先
-
-ルーターは最大2DBまで選択します。これにより、9個以上DBがあっても毎回全部の内容をGeminiへ送る必要がありません。
-
----
-
-## 3. AI検索の効率化
-
-### Gemini呼び出し回数
-
-原則として **1質問 = 1回のGemini呼び出し** です。
-
-### Notion DBスキーマのキャッシュ
-
-DBタイトルやプロパティ構造はRenderプロセス内で約10分キャッシュします。
-
-そのためAI質問のたびに全DBのメタデータを取り直す負荷を減らします。
-
-### 最大取得DB数
-
-```text
-MAX_AI_DATABASES = 2
-```
-
-関連度の高い最大2DBのみ取得します。
-
-### 1DBあたりの最大取得件数
-
-```text
-MAX_ROWS_PER_DB = 40
-```
-
-大量データを無制限にGeminiへ渡さないための安全策です。
-
-### AIへ渡す最大コンテキスト
-
-```text
-MAX_CONTEXT_CHARS = 18000
-```
-
-取得データが多すぎる場合は上限で切ります。
-
-### 日付フィルター
-
-質問に次の表現が含まれる場合、日付プロパティを持つDBではNotion側で期間を絞ります。
-
-- 今日
-- 昨日
-- 今週
-- 先週
-- 今月
-- 先月
-- 今年
-
-例:
-
-```text
-AI 今月の家計簿を分析して
-```
-
-の場合、全履歴を読むのではなく今月分だけ取得します。
-
----
-
-## 4. 60秒タイムアウト
-
-AI検索は `app.py` 側で最大60秒待機します。
-
-```text
-worker.join(timeout=60)
-```
-
-60秒を超えた場合はLINEへタイムアウトメッセージを送ります。
-
-この60秒設定は現在も維持しています。
-
-理由:
-
-- Gemini側の一時的な遅延に余裕を持たせるため
-- Notion取得とGemini回答の両方を含むため
-- 503 / 429 等の一時エラー時にリトライが入る場合があるため
-
-DBルーティング最適化により以前より処理量は減っていますが、安定運用を優先して現時点では60秒のままです。
-
----
-
-## 5. Notion DB ID の管理方針
-
-専用機能で使うDBは個別の環境変数を使います。
-
-```text
-NOTION_KAKEIBO_DATABASE_ID
-NOTION_MONTHLY_DATABASE_ID
-NOTION_FIXED_DATABASE_ID
-NOTION_MEMO_DATABASE_ID
-NOTION_URL_DATABASE_ID
-```
-
-`NOTION_DATABASE_IDS` は、上記の専用変数に含まれない **追加のAI検索対象DB** をカンマ区切りで指定します。
-
-コード側で専用DBと追加DBを自動統合し、重複IDを除去します。
-
-つまり、現在9個DBがあり、そのうち5個が上記専用DBなら、`NOTION_DATABASE_IDS` には残り4個だけ入れる運用が推奨です。
-
-```text
-専用DB 5個
-+
-NOTION_DATABASE_IDS の追加DB 4個
-=
-AI検索候補 9個
-```
-
-同じDB IDを両方へ書いてしまってもコード側で重複除去されますが、管理上は重複させない方が分かりやすいです。
-
----
-
-## 6. 家計簿
-
-### 手動支出入力
+### 家計簿
 
 ```text
 支出 1200 ラーメン
-支出 3200 新宿 レストラン
+支出 500 コンビニ
 ```
 
-店名に空白があっても全文を保存します。
-
-ジャンルと支払方法はNotionのSelect候補からLINE Flex Messageで選択します。
+Notion の家計簿 DB に支出を保存します。ジャンルと支払方法は LINE 上で選択できます。
 
 ### クレジットカード利用通知
 
-Gmailのカード利用通知をGASが確認し、LINE Push APIへFlex Messageを直接送ります。
+Gmail に届いたカード利用メールを GAS が定期確認し、LINE へ Flex Message を直接 Push します。
 
-対応:
+対応対象:
 
 - JCB
 - 三井住友カード
 - 楽天カード
 - PayPayカード
 
-推奨:
+推奨運用:
 
-- GAS実行: 1時間ごと
+- GAS: 1時間ごと
 - 実処理対象: 直近2時間
-- Gmail Message IDで重複通知防止
-- 既読/未読には依存しない
-- 本文の利用日を可能な限り使用
+- 既読・未読ではなく Gmail Message ID で重複防止
+- 本文に実利用日がある場合はメール受信日より優先
 
----
+### 予算管理
 
-## 7. 家計簿ダッシュボード
+```text
+予算 100000
+予算 食費 30000
+予算一覧
+```
+
+全体予算・ジャンル別予算・支出・残額を管理します。
+
+### 家計簿ダッシュボード
 
 ```text
 今月
@@ -271,57 +82,26 @@ Gmailのカード利用通知をGASが確認し、LINE Push APIへFlex Message�
 - 月末までの日数
 - 1日あたり使える金額
 - 支出上位ジャンル
-- 支払方法別支出
+- 支払方法別集計
 
----
-
-## 8. 予算
+### 予算アラート
 
 ```text
-予算 100000
-予算 食費 30000
-予算 2026-10 食費 35000
-予算一覧
 予算アラート
 ```
 
-予算アラートは80% / 90% / 100%以上を判定します。
+全体予算・ジャンル別予算について 80% / 90% / 100% を判定します。
 
-定期通知API:
-
-```text
-POST /api/budget-alert
-```
-
----
-
-## 9. 週次レポート
+### 週次レポート
 
 ```text
 週次レポート
 今週
 ```
 
-直近7日間と、その前の7日間を比較します。
+直近7日間とその前7日間を比較します。
 
-表示:
-
-- 支出合計
-- 件数
-- 前期間比
-- 増減額
-- 増減率
-- 上位ジャンル
-
-定期通知API:
-
-```text
-POST /api/weekly-report
-```
-
----
-
-## 10. 固定費
+### 固定費
 
 ```text
 固定費一覧
@@ -329,11 +109,9 @@ POST /api/weekly-report
 固定費追加 Netflix 1490 サブスク JCB
 ```
 
-固定費マスタDBの `有効` がONの項目を使用します。
+Notion の固定費マスタから一括登録できます。
 
----
-
-## 11. メモ
+### メモ
 
 ```text
 メモ 牛乳を買う
@@ -341,97 +119,236 @@ POST /api/weekly-report
 メモ削除
 ```
 
-削除は以下の2段階です。
+削除は「候補選択 → 確認 → 削除」の2段階です。
 
-```text
-メモ削除
-  ↓
-候補一覧
-  ↓
-対象を選択
-  ↓
-削除確認
-  ↓
-削除する / やめる
-```
+### 日次メモ通知
 
-1日1回の自動一覧通知も利用できます。
+`gas/DailyMemo.gs` から `/api/daily-memo` を呼び、1日1回メモ一覧を LINE に送れます。
 
-```text
-POST /api/daily-memo
-```
-
----
-
-## 12. Notion汎用機能
-
-### データ追加
+### Notion 汎用データ追加
 
 ```text
 データ追加
 ```
 
-対象DBのプロパティを順番に入力し、最後に確認して登録します。
+専用 DB ID と `NOTION_DATABASE_IDS` を統合した一覧から登録先を選び、対話形式でページを作成します。
 
 ### URL保存
 
-```text
-https://example.com
-```
-
-URLをそのまま送ると `NOTION_URL_DATABASE_ID` のDBへ保存します。
-
-### Notionリンク
-
-```text
-Notion
-```
-
-`NOTION_PAGE_URL` を返信します。
+http / https から始まる URL を送ると `NOTION_URL_DATABASE_ID` の DB へ保存します。
 
 ---
 
-## 13. 定期通知
+## 3. AI検索
 
-GASからRender APIを呼び出します。
+### 起動方法
 
-### 毎日
-
-```text
-sendDailyMemoReminder
-sendDailyBudgetAlert
-```
-
-### 毎週
+Gemini を使うのは次の形式だけです。
 
 ```text
-sendWeeklyFinanceReport
+AI 今月の食費を分析して
+AI メモの内容を整理して
+AI 最近の支出傾向を教えて
 ```
 
-Render側では `SCHEDULER_SECRET`、GAS側では同じ値のScript Propertyを使用します。
+`AI` だけ送ると使い方だけ表示し、Gemini API は消費しません。
+
+### AIルーティング
+
+AI質問を受けると、Python が Notion の DB タイトル・用途・プロパティ名・プロパティ型と質問文を比較し、**必要性が高い最大2DBだけ**を取得します。
+
+DB選択には Gemini を使いません。
+
+```text
+AI 質問
+  ↓
+Python DB Router
+  ↓
+必要な最大2DBだけNotionから取得
+  ↓
+関連する過去のAI改善例を最大3件取得
+  ↓
+Gemini 最終回答 1回
+  ↓
+LINE
+```
+
+これにより、旧構成の「DB選択でGemini 1回 + 回答でGemini 1回」から、原則 **1質問 = Gemini 1回** になっています。
+
+### 日付フィルター
+
+以下の表現を質問から認識し、Notion 側で期間を絞ります。
+
+- 今日
+- 昨日
+- 今週
+- 先週
+- 今月
+- 先月
+- 今年
+
+### キャッシュ・制限
+
+- DBスキーマキャッシュ: 10分
+- 最大参照DB: 2
+- 1DBあたり最大取得件数: 40
+- Geminiへ渡す通常Notionコンテキスト: 最大約18,000文字
+- AI処理タイムアウト: 60秒
+
+60秒は Gemini / Notion の一時的な遅延やリトライに備える安全弁として残しています。
 
 ---
 
-## 14. UI
+## 4. AI回答改善ループ
 
-LINE Flex Messageは長い日本語が切れにくいよう、原則1列・全幅ボタンを使用しています。
+AI回答が期待と違った場合、ユーザー自身の修正内容を Notion に保存し、その後の似た質問で回答品質を改善できます。
 
-メモ削除など本文確認が重要な画面では、ボタンラベルだけでなく本文を表示してから操作できるようにしています。
+### 使い方
+
+まず通常どおりAIへ質問します。
+
+```text
+AI ○○について教えて
+```
+
+回答がおかしい、回答できなかった、観点が違う、説明方法が違う場合:
+
+```text
+AI改善
+```
+
+Bot は直前の質問とAI回答を表示し、
+
+```text
+本当はどのように答えてほしかったですか？
+```
+
+と尋ねます。
+
+そこで例えば、
+
+```text
+家計簿DBだけではなく月別管理DBも見て、予算との差額まで出してほしかった。
+金額は最後に表でまとめてほしい。
+```
+
+と送ると、専用の `AI改善ログ` DB に保存します。
+
+### 保存内容
+
+AI改善ログ DB:
+
+| プロパティ | 型 | 内容 |
+|---|---|---|
+| `質問` | Title | ユーザーが最初に送ったAI質問 |
+| `AI回答` | Rich text | 実際に返した回答 |
+| `期待する回答` | Rich text | 本当はどう答えてほしかったか |
+| `登録日時` | Date | 改善ログ登録日時 |
+
+Render 環境変数:
+
+```text
+NOTION_AI_FEEDBACK_DATABASE_ID
+```
+
+### 次回以降の利用方法
+
+次の AI 質問時に `ai_feedback.py` が改善ログ DB から最大100件を取得し、質問の文字列類似度を Python で計算します。
+
+関連度の高い改善例を最大3件だけ Gemini の最終プロンプトへ追加します。
+
+重要な点:
+
+- 改善例の検索に Gemini は使わない
+- Gemini API回数は増えない
+- 過去の「期待する回答」を回答スタイル・観点・粒度の参考にする
+- 過去例の事実そのものを今回の事実として流用しない
+- 今回取得した Notion データを優先する
+
+つまり、単純な会話履歴ではなく、**ユーザーが明示的に訂正した良質な教師データだけを使う**構成です。
+
+### 注意点
+
+直前のAI質問と回答は Render プロセスのメモリに一時保持しています。`AI改善` を実行して期待回答を保存した時点で Notion に永続化されます。
+
+Render が「AI回答 → AI改善」の間に再起動した場合、直前回答を特定できないことがあります。この部分は将来 Redis / Notion 一時ログ等へ永続化する改善余地があります。
 
 ---
 
-## 15. ファイル構成
+## 5. Notion DB の管理方針
+
+専用DBは専用環境変数で設定します。
+
+```text
+NOTION_KAKEIBO_DATABASE_ID
+NOTION_MONTHLY_DATABASE_ID
+NOTION_FIXED_DATABASE_ID
+NOTION_MEMO_DATABASE_ID
+NOTION_URL_DATABASE_ID
+NOTION_AI_FEEDBACK_DATABASE_ID
+```
+
+それ以外のAI検索・汎用登録対象DBは:
+
+```text
+NOTION_DATABASE_IDS
+```
+
+にカンマ区切りで指定します。
+
+専用IDと追加IDはコード側で統合し、重複を除去します。
+
+`NOTION_AI_FEEDBACK_DATABASE_ID` は特殊用途のため、通常のAIデータ検索候補には混ぜず、改善例として別ルートで利用します。
+
+---
+
+## 6. メインメニュー
+
+```text
+メニュー
+機能
+機能一覧
+```
+
+原則1列・全幅の Flex Message で表示します。
+
+AI欄には:
+
+- AI検索の使い方
+- 直前のAI回答を改善
+
+を表示します。
+
+---
+
+## 7. 定期実行API
+
+| API | 用途 | 認証 |
+|---|---|---|
+| `POST /api/daily-memo` | 日次メモ一覧 | `X-API-KEY` |
+| `POST /api/budget-alert` | 予算アラート | `X-API-KEY` |
+| `POST /api/weekly-report` | 週次レポート | `X-API-KEY` |
+| `POST /api/register-fixed` | 固定費一括登録 | 現状要改善 |
+| `POST /api/monthly-notice` | 月初予算案内 | 現状要改善 |
+
+認証付きAPIは Render の `SCHEDULER_SECRET` と GAS Script Properties の同名値を一致させます。
+
+---
+
+## 8. ファイル構成
 
 ```text
 line-notion-bot/
-├── app.py
-├── kakeibo.py
-├── budget.py
-├── insights.py
-├── memo.py
-├── menu.py
-├── ui.py
-├── notion_helper.py
+├── app.py                 # Flask / LINEルーティング / コマンド処理
+├── kakeibo.py             # 家計簿・予算・固定費
+├── budget.py              # 月次予算集計
+├── insights.py            # ダッシュボード・アラート・週次レポート
+├── memo.py                # メモ
+├── menu.py                # メインメニュー
+├── ui.py                  # 読みやすいFlex UI
+├── notion_helper.py       # Notionアクセス・DBルーター
+├── ai_engine.py           # Notion + 改善例 + Gemini最終回答
+├── ai_feedback.py         # AI改善ログ保存・類似例検索
 ├── prompt.txt
 ├── requirements.txt
 ├── README.md
@@ -443,96 +360,64 @@ line-notion-bot/
     └── README.md
 ```
 
-### 主要役割
-
-`app.py`
-: Flask、LINE Webhook、コマンドルーティング、AI prefix判定、60秒タイムアウト、定期API
-
-`notion_helper.py`
-: Notion操作、AI向けDB自動ルーティング、スキーマキャッシュ、Gemini最終回答
-
-`kakeibo.py`
-: 支出、予算保存、固定費、カード通知
-
-`budget.py`
-: 月次予算と支出集計
-
-`insights.py`
-: ダッシュボード、予算アラート、週次レポート
-
-`memo.py`
-: メモ保存・一覧・確認付き削除
-
-`menu.py` / `ui.py`
-: LINE Flex Message UI
-
 ---
 
-## 16. 環境変数
-
-### LINE
+## 9. 主要環境変数
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
 LINE_CHANNEL_SECRET
-ADMIN_USER_ID
-```
-
-### Notion
-
-```text
+GEMINI_API_KEY
+GEMINI_MODEL
 NOTION_API_KEY
 NOTION_KAKEIBO_DATABASE_ID
 NOTION_MONTHLY_DATABASE_ID
 NOTION_FIXED_DATABASE_ID
 NOTION_MEMO_DATABASE_ID
 NOTION_URL_DATABASE_ID
+NOTION_AI_FEEDBACK_DATABASE_ID
 NOTION_DATABASE_IDS
 NOTION_PAGE_URL
-```
-
-### Gemini
-
-```text
-GEMINI_API_KEY
-GEMINI_MODEL
-```
-
-`GEMINI_MODEL` は未設定時 `gemini-3.6-flash` を使用します。
-
-### 定期実行
-
-```text
+ADMIN_USER_ID
 SCHEDULER_SECRET
 ```
 
+秘密鍵・アクセストークンは GitHub に直接記載しないでください。
+
 ---
 
-## 17. AIログ
-
-AIルーターは選択したDBとスコアをRenderログへ出します。
-
-例:
+## 10. AI改善の動作確認
 
 ```text
-[AI Router] 家計簿 score=18.0 reasons=role:食費,prop:金額
+AI 今月の食費を説明して
 ```
 
-AIが違うDBを選んだ場合は、このログからルーティング改善ができます。
+AI回答後:
+
+```text
+AI改善
+```
+
+Bot の質問に対して:
+
+```text
+予算と比較して、残額と今月あと1日いくら使えるかまで説明してほしかった
+```
+
+Notion の AI改善ログ DB に1件追加されれば成功です。
+
+その後、似た質問を再度送ると関連する改善例が最終プロンプトに含まれます。
 
 ---
 
-## 18. 今後の改善候補
+## 11. 今後の改善候補
 
-- 予算アラートを80% / 90% / 100%到達時に各1回だけ通知
-- 固定費の同月二重登録防止
-- `user_states` のRedis等への永続化
-- AIルーティング辞書を実際のDB名に合わせてさらに調整
-- Gemini上限到達時の別AIフォールバック
-- AI検索結果のページネーション / 集計専用ロジック
+- AI直前回答の永続化（Render再起動対策）
+- AI改善ログの「良い / 不要」評価
+- 改善ログ件数が増えた場合のベクトル検索
+- 予算アラートを80/90/100%到達時に一度だけ通知
+- 固定費の完全な重複登録防止
+- 定期APIの認証統一
+- `user_states` の Redis 等への永続化
 
----
-
-## 19. 開発時のルール
-
-機能追加・仕様変更を行った場合は、コードだけでなく **README.md と SETUP.md も同時に更新**します。
+この README は機能変更と同時に更新する方針です。
