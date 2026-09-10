@@ -23,6 +23,7 @@ import insights
 import ui
 import ai_feedback
 import ai_engine
+import card_queue
 
 app = Flask(__name__)
 
@@ -132,6 +133,68 @@ def api_weekly_report():
         return json.dumps({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/card-pending", methods=["POST"])
+def api_card_pending():
+    """GASからカード利用を未処理キューへ保存します。"""
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    required = ["message_id", "card", "store", "amount", "date"]
+    missing = [key for key in required if data.get(key) in [None, ""]]
+    if missing:
+        return json.dumps({"status": "error", "message": f"missing: {','.join(missing)}"}), 400
+
+    result = card_queue.enqueue_card(
+        data["message_id"], data["card"], data["store"], data["amount"], data["date"]
+    )
+    if not result.get("ok"):
+        return json.dumps({"status": "error", "message": result.get("error", "enqueue failed")}), 500
+
+    item = result["item"]
+    return json.dumps({
+        "status": "success",
+        "created": result.get("created", False),
+        "pending_id": item.get("id"),
+        "notified": item.get("notified", False),
+        "pending_count": card_queue.get_pending_count(),
+    }, ensure_ascii=False), 200
+
+
+@app.route("/api/card-pending-notified", methods=["POST"])
+def api_card_pending_notified():
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    pending_id = data.get("pending_id")
+    if not pending_id:
+        return json.dumps({"status": "error", "message": "pending_id is required"}), 400
+    success = card_queue.mark_notified(pending_id)
+    return json.dumps({"status": "success" if success else "error"}), 200 if success else 500
+
+
+@app.route("/api/card-pending-reminder", methods=["POST"])
+def api_card_pending_reminder():
+    """1日1回、未処理カードがあるときだけ件数をLINE通知します。"""
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+    if not ADMIN_USER_ID:
+        return json.dumps({"status": "error", "message": "ADMIN_USER_ID is not configured"}), 500
+
+    count = card_queue.get_pending_count()
+    if count <= 0:
+        return json.dumps({"status": "success", "sent": False, "pending_count": 0}), 200
+
+    try:
+        push_line(
+            ADMIN_USER_ID,
+            f"💳 ジャンル未選択のカード利用が {count} 件あります。\n「カード未処理」と送ると、1件ずつ続けて処理できます。"
+        )
+        return json.dumps({"status": "success", "sent": True, "pending_count": count}), 200
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}), 500
+
+
 def _format_messages(messages):
     if isinstance(messages, str):
         return [TextMessage(text=messages)]
@@ -197,11 +260,24 @@ def start_manual_kakeibo(user_id, reply_token, text):
     )])
 
 
-def _card_category_flex(card, store, amount, date_str):
+def _card_category_flex(card, store, amount, date_str, pending_id=None):
     categories = kakeibo.get_notion_select_options(
         NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=kakeibo.EXCLUDED_GENRES
     ) or ["食費", "日用品", "交通費", "娯楽"]
-    return ui.create_card_category_flex(card, store, amount, date_str, categories)
+    return ui.create_card_category_flex(card, store, amount, date_str, categories, pending_id=pending_id)
+
+
+def _next_pending_messages(exclude_id=None):
+    next_item = card_queue.get_next_pending(exclude_id=exclude_id)
+    if not next_item:
+        return [TextMessage(text="✅ カードの未処理はすべて完了しました。")]
+    count = card_queue.get_pending_count()
+    return [
+        TextMessage(text=f"次の未処理カードです。残り {count} 件あります。"),
+        _card_category_flex(
+            next_item["card"], next_item["store"], next_item["amount"], next_item["date"], next_item["id"]
+        ),
+    ]
 
 
 def _run_ai_search(user_id, reply_token, query):
@@ -255,6 +331,15 @@ def handle_postback(event):
         reply_line(event.reply_token, "操作をキャンセルしました。")
         return
 
+    if action == "skip_card_pending":
+        pending_id = params.get("pending_id")
+        if pending_id:
+            card_queue.skip(pending_id)
+        messages = [TextMessage(text="このカード利用は登録せず、未処理キューから削除しました。")]
+        messages.extend(_next_pending_messages(exclude_id=pending_id))
+        reply_line(event.reply_token, messages[:5])
+        return
+
     if action == "start_monthly_budget_input":
         user_states[user_id] = {"step": "WAITING_MONTHLY_BUDGET"}
         reply_line(event.reply_token, "📅 今月の全体予算を入力して送信してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
@@ -263,7 +348,9 @@ def handle_postback(event):
     if action == "card_select_cat":
         reply_line(event.reply_token, [
             TextMessage(text="ジャンル選択へ進みます。"),
-            _card_category_flex(params.get("card"), params.get("store"), params.get("amount"), params.get("date")),
+            _card_category_flex(
+                params.get("card"), params.get("store"), params.get("amount"), params.get("date"), params.get("pending_id")
+            ),
         ])
         return
 
@@ -274,6 +361,7 @@ def handle_postback(event):
             "old_store": params.get("store"),
             "amount": params.get("amount"),
             "date": params.get("date"),
+            "pending_id": params.get("pending_id"),
         }
         reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n（現在の仮名称: {params.get('store')}）")
         return
@@ -295,18 +383,29 @@ def handle_postback(event):
         return
 
     if action == "kakeibo_save":
+        pending_id = params.get("pending_id")
         res_msg = kakeibo.save_kakeibo_to_notion(
             params.get("card"), params.get("store"), params.get("amount"),
             params.get("date"), params.get("cat")
         )
+        success = res_msg.startswith("家計簿に記録しました！")
         messages = [
             TextMessage(text=f"📌「{params.get('cat')}」を選択しました。"),
             TextMessage(text=res_msg),
         ]
+
+        if success and pending_id:
+            removed = card_queue.complete(pending_id)
+            if not removed:
+                messages[1] = TextMessage(text=res_msg + "\n\n⚠️ 家計簿保存は成功しましたが、未処理キューの削除に失敗しました。")
+
         alerts = insights.get_budget_alerts()
         if alerts:
             messages.append(insights.create_budget_alert_flex())
-        reply_line(event.reply_token, messages)
+
+        if success and pending_id:
+            messages.extend(_next_pending_messages(exclude_id=pending_id))
+        reply_line(event.reply_token, messages[:5])
         return
 
     if action == "manual_cat_select" and user_id in user_states:
@@ -389,6 +488,18 @@ def handle_message(event):
         )
         return
 
+    if user_message in ["カード未処理", "カード保留", "カード未分類"]:
+        count = card_queue.get_pending_count()
+        if count <= 0:
+            reply_line(reply_token, "✅ ジャンル未選択のカード利用はありません。")
+        else:
+            item = card_queue.get_next_pending()
+            reply_line(reply_token, [
+                TextMessage(text=f"💳 ジャンル未選択が {count} 件あります。古いものから1件ずつ処理します。"),
+                _card_category_flex(item["card"], item["store"], item["amount"], item["date"], item["id"]),
+            ])
+        return
+
     if user_message in ["今月", "ダッシュボード", "家計簿ダッシュボード", "今月の家計簿"]:
         try:
             reply_line(reply_token, [insights.create_dashboard_flex()])
@@ -425,7 +536,7 @@ def handle_message(event):
             state_data = user_states[user_id]
             if state_data.get("step") == "WAITING_STORE_NAME_CHANGE":
                 flex_msg = _card_category_flex(
-                    state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"]
+                    state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"], state_data.get("pending_id")
                 )
                 store = state_data["old_store"]
                 del user_states[user_id]
@@ -439,8 +550,11 @@ def handle_message(event):
 
     if user_id in user_states and user_states[user_id].get("step") == "WAITING_STORE_NAME_CHANGE":
         state_data = user_states.pop(user_id)
+        pending_id = state_data.get("pending_id")
+        if pending_id:
+            card_queue.update_store(pending_id, user_message)
         flex_msg = _card_category_flex(
-            state_data["card"], user_message, state_data["amount"], state_data["date"]
+            state_data["card"], user_message, state_data["amount"], state_data["date"], pending_id
         )
         reply_line(reply_token, [TextMessage(text=f"店名を「{user_message}」に変更しました。"), flex_msg])
         return
@@ -657,6 +771,7 @@ def handle_message(event):
             "・週次レポート: 直近7日と前7日を比較\n"
             "・予算アラート: 80% / 90% / 100%を確認\n"
             "・支出入力: 支出 1200 ラーメン\n"
+            "・カード未処理: ジャンル未選択カードを1件ずつ処理\n"
             "・予算一覧: 予算一覧\n"
             "・全体予算: 予算 100000\n"
             "・ジャンル予算: 予算 食費 30000\n"
