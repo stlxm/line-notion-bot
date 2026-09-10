@@ -61,12 +61,7 @@ def _fixed_page_to_item(page):
     }
 
 
-def find_fixed_match(card_name, store_name):
-    """カード名 + 正規化店名が一致する有効固定費を返す。"""
-    pages = _query_active_fixed()
-    if pages is None:
-        return None
-
+def _find_in_pages(pages, card_name, store_name):
     target_card = str(card_name or "").strip()
     target_store = card_rules.normalize_store_name(store_name)
     if not target_card or not target_store:
@@ -82,22 +77,42 @@ def find_fixed_match(card_name, store_name):
     return None
 
 
+def find_fixed_match(card_name, store_name):
+    """カード名 + 正規化店名が一致する有効固定費を返す。"""
+    pages = _query_active_fixed()
+    if pages is None:
+        return None
+    return _find_in_pages(pages, card_name, store_name)
+
+
 def is_card_detection_excluded(card_name, store_name):
-    """固定費DBに一致するカード利用なら通常カード検出から除外する。"""
-    return find_fixed_match(card_name, store_name) is not None
+    """固定費DBに一致するカード利用なら通常カード検出から除外する。
+
+    Notion検索に失敗した場合は誤除外を避けるため False にする。
+    """
+    pages = _query_active_fixed()
+    if pages is None:
+        return False
+    return _find_in_pages(pages, card_name, store_name) is not None
 
 
 def ensure_fixed_expense(store_name, amount, category, card_name):
     """固定費/サブスクを重複作成せず固定費DBへ登録・更新する。
 
     戻り値: (success, created)
+    Notion側の既存確認に失敗した場合は、重複作成を避けるため新規作成しない。
     """
     if category not in {"固定費", "サブスク"}:
         return False, False
     if not NOTION_API_KEY or not NOTION_FIXED_DATABASE_ID:
         return False, False
 
-    existing = find_fixed_match(card_name, store_name)
+    pages = _query_active_fixed()
+    if pages is None:
+        print("固定費マスタの既存確認に失敗したため登録を中止しました。")
+        return False, False
+
+    existing = _find_in_pages(pages, card_name, store_name)
     properties = {
         "内容・店名": {"title": [{"text": {"content": str(store_name)}}]},
         "金額": {"number": float(amount)},
