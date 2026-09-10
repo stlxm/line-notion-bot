@@ -203,6 +203,32 @@ def _card_category_flex(card, store, amount, date_str):
     return ui.create_card_category_flex(card, store, amount, date_str, categories)
 
 
+def _run_ai_search(user_id, reply_token, query):
+    """明示的に AI 接頭辞が付いた質問だけ Gemini を呼び出します。"""
+    reply_line(reply_token, "🤖 AIで検索・回答を生成しています。完了後にLINEへ送信します。")
+
+    def background_ai_search(uid, msg):
+        result_container = {}
+
+        def target_task():
+            try:
+                notion_context = notion_helper.fetch_notion_context()
+                result_container["response"] = notion_helper.generate_gemini_response(msg, notion_context)
+            except Exception as e:
+                result_container["response"] = f"AI検索でエラーが発生しました: {str(e)}"
+
+        worker = threading.Thread(target=target_task)
+        worker.start()
+        worker.join(timeout=60)
+
+        if worker.is_alive():
+            push_line(uid, "AI検索が60秒の制限を超えました。もう一度試してください。")
+        else:
+            push_line(uid, result_container.get("response", "AIから応答を取得できませんでした。"))
+
+    threading.Thread(target=background_ai_search, args=(user_id, query)).start()
+
+
 @handler.add(PostbackEvent)
 def handle_postback(event):
     user_id = event.source.user_id
@@ -599,32 +625,32 @@ def handle_message(event):
             "・データ追加: データ追加\n"
             "・URL保存: URLをそのまま送信\n"
             "・Notionリンク: Notion\n\n"
-            "◆ AI検索\n知りたい情報をそのまま質問してください。"
+            "◆ AI検索\n"
+            "AIは自動では呼び出しません。\n"
+            "「AI 」の後に質問を書いたときだけGeminiを使用します。\n"
+            "例: AI 今月の食費について分析して"
         )
         reply_line(reply_token, help_text)
         return
 
-    reply_line(reply_token, "最大60秒お待ちください…データを検索・処理しています。")
+    if user_message == "AI" or user_message == "ai" or user_message == "Ai":
+        reply_line(
+            reply_token,
+            "【AI検索の使い方】\nAIの後に半角または全角スペースを入れて質問してください。\n\n例: AI 今月の食費について分析して\n例: AI メモの内容を整理して\n\nAIを付けない通常メッセージではGemini APIを呼び出しません。"
+        )
+        return
 
-    def background_ai_search(uid, msg):
-        result_container = {}
+    ai_match = re.match(r"^AI[ \u3000]+(.+)$", user_message, flags=re.IGNORECASE)
+    if ai_match:
+        ai_query = ai_match.group(1).strip()
+        if ai_query:
+            _run_ai_search(user_id, reply_token, ai_query)
+            return
 
-        def target_task():
-            try:
-                notion_context = notion_helper.fetch_notion_context()
-                result_container["response"] = notion_helper.generate_gemini_response(msg, notion_context)
-            except Exception as e:
-                result_container["response"] = f"エラーが発生しました: {str(e)}"
-
-        t = threading.Thread(target=target_task)
-        t.start()
-        t.join(timeout=60)
-        if t.is_alive():
-            push_line(uid, "申し訳ありません。60秒のタイムアウト制限を超えたため処理を中断しました。もう一度やり直してください。")
-        else:
-            push_line(uid, result_container.get("response", "応答の生成に失敗しました。"))
-
-    threading.Thread(target=background_ai_search, args=(user_id, user_message)).start()
+    reply_line(reply_token, [
+        TextMessage(text="そのコマンドはありません。メニューから機能を選んでください。\nAIを使う場合は「AI 質問内容」と送信してください。"),
+        menu.create_main_menu_flex(),
+    ])
 
 
 if __name__ == "__main__":
