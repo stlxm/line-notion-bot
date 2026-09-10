@@ -20,6 +20,7 @@
 - `ui.py`: 共通Flex Message
 - `kakeibo.py`: 家計簿、予算、固定費
 - `card_queue.py`: カード未処理キュー
+- `card_rules.py`: 開発中のカード店名正規化・ジャンル学習エンジン。現時点ではLINEフロー未接続
 - `budget.py`: 月次予算集計
 - `insights.py`: ダッシュボード、アラート、週次レポート
 - `memo.py`: メモ
@@ -33,6 +34,8 @@
 - `SETUP.md`: 構築方法
 - `DEVELOPMENT.md`: 開発進捗と次回再開位置
 - `UI_DESIGN.md`: UIルール
+
+重要: `card_rules.py` はPhase 1の基盤だけ先に作成済みですが、まだ `app.py` から呼ばれていません。`DEVELOPMENT.md` で「接続済み」になるまでは、カード学習DBを作らなくても現在のBot機能には影響しません。
 
 ## 3. Renderで確認する環境変数
 
@@ -73,6 +76,15 @@ GEMINI_MODEL
 ```text
 SCHEDULER_SECRET
 ```
+
+Phase 1接続後に追加予定:
+
+```text
+NOTION_CARD_RULES_DATABASE_ID
+CARD_AUTO_REGISTER_MIN_MATCHES
+```
+
+現時点では未接続なので必須ではありません。
 
 ## 4. GAS Script Properties
 
@@ -201,11 +213,13 @@ UIを変更するときは `UI_DESIGN.md` のルールを優先します。
 ## 11. 安全な修正手順
 
 1. 変更前に現在のGitHub `main` を確認
-2. 1つの目的ごとに修正
-3. Renderデプロイログを確認
-4. LINEで該当機能を1回テスト
-5. GAS変更時はApps Scriptへコピー
-6. README / SETUP / DEVELOPMENTを更新
+2. `DEVELOPMENT.md` の再開位置を確認
+3. 1つの目的ごとに修正
+4. Renderデプロイログを確認
+5. LINEで該当機能を1回テスト
+6. GAS変更時はApps Scriptへコピー
+7. README / SETUP / DEVELOPMENTを更新
+8. UI変更時はUI_DESIGNも更新
 
 ## 12. 復旧の考え方
 
