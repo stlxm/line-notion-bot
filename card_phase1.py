@@ -42,7 +42,7 @@ def classify_same_store(pending_id, category):
     """
     origin = card_queue.get_item(pending_id)
     if not origin:
-        return {"status": "missing", "saved": 0, "needs_review": 0, "failed": 0}
+        return {"status": "missing", "saved": 0, "reconciled": 0, "needs_review": 0, "failed": 0}
 
     targets = card_queue.get_matching_pending_items(origin["card"], origin["store"])
     saved = 0
@@ -68,8 +68,13 @@ def classify_same_store(pending_id, category):
             failed += 1
 
     return {
-        "status": "done", "total": len(targets), "saved": saved,
-        "needs_review": needs_review, "failed": failed,
+        "status": "done",
+        "total": len(targets),
+        "saved": saved,
+        "reconciled": 0,
+        "needs_review": needs_review,
+        # 現行UIでは「失敗・未処理のまま」にまとめて表示するため、要確認も含める。
+        "failed": failed + needs_review,
     }
 
 
