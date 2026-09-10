@@ -13,7 +13,7 @@ const GMAIL_SEARCH_DAYS = 2;         // Gmail検索は広め。最終判定は�
 const LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push";
 const PROCESSED_IDS_KEY = "PROCESSED_CARD_MESSAGE_IDS";
 const BACKFILL_IDS_KEY = "BACKFILLED_CARD_MESSAGE_IDS";
-const MAX_PROCESSED_IDS = 2000;
+const MAX_PROCESSED_IDS = 400; // Script Properties 1値のサイズを大きくしすぎない
 
 function checkCardEmails() {
   Logger.log("--- 通常カード監視 開始 ---");
@@ -408,7 +408,7 @@ function backfillCardEmailsForMonth(year, month) {
     targetMonth: targetMonth,
     ignoreNormalProcessed: true,
     backfillMode: true,
-    maxThreads: 200,
+    maxThreads: 500,
   };
 
   let created = 0;
