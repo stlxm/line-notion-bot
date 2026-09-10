@@ -24,6 +24,9 @@ import ui
 import ai_feedback
 import ai_engine
 import card_queue
+import card_rules
+import card_phase1
+import ledger_guard
 
 app = Flask(__name__)
 
@@ -111,7 +114,6 @@ def api_budget_alert():
     alerts = insights.get_budget_alerts()
     if not alerts:
         return json.dumps({"status": "success", "sent": False, "alerts": 0}), 200
-
     try:
         push_line(ADMIN_USER_ID, insights.create_budget_alert_flex())
         return json.dumps({"status": "success", "sent": True, "alerts": len(alerts)}), 200
@@ -125,7 +127,6 @@ def api_weekly_report():
         return json.dumps({"status": "error", "message": "Unauthorized"}), 401
     if not ADMIN_USER_ID:
         return json.dumps({"status": "error", "message": "ADMIN_USER_ID is not configured"}), 500
-
     try:
         push_line(ADMIN_USER_ID, insights.create_weekly_report_flex())
         return json.dumps({"status": "success", "sent": True}), 200
@@ -135,7 +136,7 @@ def api_weekly_report():
 
 @app.route("/api/card-pending", methods=["POST"])
 def api_card_pending():
-    """GASからカード利用を未処理キューへ保存します。"""
+    """GASからカード利用を受け取り、固定費除外・照合・自動登録・未処理保存を行う。"""
     if not _scheduler_authorized():
         return json.dumps({"status": "error", "message": "Unauthorized"}), 401
 
@@ -145,6 +146,18 @@ def api_card_pending():
     if missing:
         return json.dumps({"status": "error", "message": f"missing: {','.join(missing)}"}), 400
 
+    # 速報/確定など別Message IDでも、すでに家計簿に同一取引があれば再キューしない。
+    ledger_dup = ledger_guard.find_duplicate(
+        data["card"], data["store"], data["amount"], data["date"]
+    )
+    if ledger_dup:
+        return json.dumps({
+            "status": "success", "created": False,
+            "pending_id": f"ledger-reconciled:{data['message_id']}",
+            "notified": True, "reconciled_ledger": True,
+            "pending_count": card_queue.get_pending_count(),
+        }, ensure_ascii=False), 200
+
     result = card_queue.enqueue_card(
         data["message_id"], data["card"], data["store"], data["amount"], data["date"]
     )
@@ -152,11 +165,41 @@ def api_card_pending():
         return json.dumps({"status": "error", "message": result.get("error", "enqueue failed")}), 500
 
     item = result["item"]
+    if result.get("ignored_fixed"):
+        return json.dumps({
+            "status": "success", "created": False,
+            "pending_id": item.get("id"), "notified": True,
+            "ignored_fixed": True, "pending_count": card_queue.get_pending_count(),
+        }, ensure_ascii=False), 200
+
+    # ユーザーが明示ONにした十分学習済みルールだけ自動登録する。
+    auto = card_phase1.try_auto_register(item.get("id"))
+    if auto.get("status") == "saved":
+        if ADMIN_USER_ID:
+            push_line(
+                ADMIN_USER_ID,
+                f"💳 カード利用を自動登録しました。\n"
+                f"{auto['item']['store']} / ¥{int(float(auto['item']['amount'])):,}\n"
+                f"ジャンル: {auto['category']}"
+            )
+        return json.dumps({
+            "status": "success", "created": result.get("created", False),
+            "pending_id": item.get("id"), "notified": True,
+            "auto_registered": True, "pending_count": card_queue.get_pending_count(),
+        }, ensure_ascii=False), 200
+    if auto.get("status") == "reconciled":
+        return json.dumps({
+            "status": "success", "created": False,
+            "pending_id": item.get("id"), "notified": True,
+            "reconciled_ledger": True, "pending_count": card_queue.get_pending_count(),
+        }, ensure_ascii=False), 200
+
     return json.dumps({
         "status": "success",
         "created": result.get("created", False),
         "pending_id": item.get("id"),
         "notified": item.get("notified", False),
+        "reconciled_pending": result.get("reconciled_pending", False),
         "pending_count": card_queue.get_pending_count(),
     }, ensure_ascii=False), 200
 
@@ -175,7 +218,6 @@ def api_card_pending_notified():
 
 @app.route("/api/card-pending-reminder", methods=["POST"])
 def api_card_pending_reminder():
-    """1日1回、未処理カードがあるときだけ件数をLINE通知します。"""
     if not _scheduler_authorized():
         return json.dumps({"status": "error", "message": "Unauthorized"}), 401
     if not ADMIN_USER_ID:
@@ -184,12 +226,35 @@ def api_card_pending_reminder():
     count = card_queue.get_pending_count()
     if count <= 0:
         return json.dumps({"status": "success", "sent": False, "pending_count": 0}), 200
-
     try:
-        push_line(
-            ADMIN_USER_ID,
-            f"💳 ジャンル未選択のカード利用が {count} 件あります。\n「カード未処理」と送ると、1件ずつ続けて処理できます。"
-        )
+        push_line(ADMIN_USER_ID, f"💳 ジャンル未選択のカード利用が {count} 件あります。\n「カード未処理」と送ると続けて処理できます。")
+        return json.dumps({"status": "success", "sent": True, "pending_count": count}), 200
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/card-month-end-check", methods=["POST"])
+def api_card_month_end_check():
+    """月末だけ未処理ゼロ確認を通知。GASから毎日呼んでも月末以外は何もしない。"""
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+    if not ADMIN_USER_ID:
+        return json.dumps({"status": "error", "message": "ADMIN_USER_ID is not configured"}), 500
+
+    now = datetime.now(JST)
+    tomorrow = now + timedelta(days=1)
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    if not force and tomorrow.month == now.month:
+        return json.dumps({"status": "success", "sent": False, "reason": "not_month_end"}), 200
+
+    count = card_queue.get_pending_count()
+    text = (
+        "✅ 月末カードチェック: 未処理は0件です。この月のカード分類は完了しています。"
+        if count == 0 else
+        f"⚠️ 月末カードチェック: ジャンル未選択が {count} 件残っています。\n「カード未処理」と送って月を締める前に処理してください。"
+    )
+    try:
+        push_line(ADMIN_USER_ID, text)
         return json.dumps({"status": "success", "sent": True, "pending_count": count}), 200
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}), 500
@@ -222,7 +287,6 @@ def start_db_selection(user_id, reply_token):
     if not db_list:
         reply_line(reply_token, "登録先データベースが設定されていません。RenderのNotion DB環境変数を確認してください。")
         return
-
     display_names = [notion_helper.get_database_title(db_id) for db_id in db_list]
     user_states[user_id] = {"step": "SELECT_DB", "db_list": db_list}
     lines = ["追加するデータベースを番号で選んでください。"]
@@ -242,29 +306,29 @@ def start_manual_kakeibo(user_id, reply_token, text):
     except ValueError:
         reply_line(reply_token, "金額は数値で入力してください。（例: 支出 1200 ラーメン）")
         return
-
     store_name = " ".join(parts[2:]) if len(parts) >= 3 else "未入力"
     date_str = datetime.now(JST).strftime("%Y-%m-%d")
-    user_states[user_id] = {
-        "step": "MANUAL_KAKEIBO_GENRE",
-        "amount": amount,
-        "store": store_name,
-        "date": date_str,
-    }
-
+    user_states[user_id] = {"step": "MANUAL_KAKEIBO_GENRE", "amount": amount, "store": store_name, "date": date_str}
     categories = kakeibo.get_notion_select_options(
         NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=kakeibo.EXCLUDED_GENRES
     ) or ["食費", "日用品", "交通費", "娯楽"]
-    reply_line(reply_token, [ui.create_choice_flex(
-        "ジャンルを選択してください", categories, "manual_cat_select", include_cancel=True
-    )])
+    reply_line(reply_token, [ui.create_choice_flex("ジャンルを選択してください", categories, "manual_cat_select", include_cancel=True)])
 
 
-def _card_category_flex(card, store, amount, date_str, pending_id=None):
+def _card_category_flex(card, store, amount, date_str, pending_id=None, save_action="kakeibo_save"):
     categories = kakeibo.get_notion_select_options(
         NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=kakeibo.EXCLUDED_GENRES
-    ) or ["食費", "日用品", "交通費", "娯楽"]
-    return ui.create_card_category_flex(card, store, amount, date_str, categories, pending_id=pending_id)
+    ) or ["食費", "日用品", "交通費", "娯楽", "サブスク"]
+    context = {"suggestion": None, "same_store_count": 1}
+    if pending_id:
+        item = card_queue.get_item(pending_id)
+        if item:
+            context = card_phase1.get_card_view_context(item)
+    return ui.create_card_category_flex(
+        card, store, amount, date_str, categories, pending_id=pending_id,
+        suggestion=context.get("suggestion"), same_store_count=context.get("same_store_count", 1),
+        save_action=save_action,
+    )
 
 
 def _next_pending_messages(exclude_id=None):
@@ -274,16 +338,12 @@ def _next_pending_messages(exclude_id=None):
     count = card_queue.get_pending_count()
     return [
         TextMessage(text=f"次の未処理カードです。残り {count} 件あります。"),
-        _card_category_flex(
-            next_item["card"], next_item["store"], next_item["amount"], next_item["date"], next_item["id"]
-        ),
+        _card_category_flex(next_item["card"], next_item["store"], next_item["amount"], next_item["date"], next_item["id"]),
     ]
 
 
 def _pending_is_active(pending_id):
-    if not pending_id:
-        return True
-    return card_queue.get_item(pending_id) is not None
+    return True if not pending_id else card_queue.get_item(pending_id) is not None
 
 
 def _reply_already_processed(reply_token, pending_id=None):
@@ -293,7 +353,6 @@ def _reply_already_processed(reply_token, pending_id=None):
 
 
 def _pending_item_or_reply(reply_token, pending_id):
-    """pending_idから未処理カードの実データを取得します。"""
     if not pending_id:
         return None
     item = card_queue.get_item(pending_id)
@@ -303,35 +362,46 @@ def _pending_item_or_reply(reply_token, pending_id):
     return item
 
 
+def _card_save_result_messages(result, pending_id, category):
+    status = result.get("status")
+    if status == "duplicate":
+        return [ui.create_duplicate_confirm_flex(pending_id, category, result["duplicate"])]
+    if status == "missing":
+        return None
+    if status == "error":
+        return [TextMessage(text=result.get("message", "家計簿への保存に失敗しました。未処理は残っています。"))]
+
+    messages = [TextMessage(text=f"📌「{category}」で保存しました。"), TextMessage(text=result["message"])]
+    if not result.get("removed", True):
+        messages[1] = TextMessage(text=result["message"] + "\n\n⚠️ 家計簿保存は成功しましたが、未処理キューの削除に失敗しました。")
+    alerts = insights.get_budget_alerts()
+    if alerts:
+        messages.append(insights.create_budget_alert_flex())
+    messages.extend(_next_pending_messages(exclude_id=pending_id))
+    return messages[:5]
+
+
 def _run_ai_search(user_id, reply_token, query):
-    """明示的に AI 接頭辞が付いた質問だけ Gemini を呼び出します。"""
     reply_line(reply_token, "🤖 AIで検索・回答を生成しています。完了後にLINEへ送信します。")
 
     def background_ai_search(uid, msg):
         result_container = {}
-
         def target_task():
             try:
                 result_container["response"] = ai_engine.generate_response(msg)
             except Exception as e:
                 result_container["response"] = f"AI検索でエラーが発生しました: {str(e)}"
-
         worker = threading.Thread(target=target_task)
         worker.start()
         worker.join(timeout=60)
-
         if worker.is_alive():
-            timeout_answer = "AI検索が60秒の制限を超えました。もう一度試してください。"
-            ai_feedback.remember_ai_interaction(uid, msg, timeout_answer)
-            push_line(uid, timeout_answer)
+            answer = "AI検索が60秒の制限を超えました。もう一度試してください。"
+            ai_feedback.remember_ai_interaction(uid, msg, answer)
+            push_line(uid, answer)
         else:
             answer = result_container.get("response", "AIから応答を取得できませんでした。")
             ai_feedback.remember_ai_interaction(uid, msg, answer)
-            push_line(uid, [
-                TextMessage(text=answer),
-                TextMessage(text="回答が期待と違う場合は「AI改善」と送ると、今回の質問と回答を改善ログに残せます。"),
-            ])
-
+            push_line(uid, [TextMessage(text=answer), TextMessage(text="回答が期待と違う場合は「AI改善」と送ると改善ログに残せます。")])
     threading.Thread(target=background_ai_search, args=(user_id, query)).start()
 
 
@@ -344,11 +414,9 @@ def handle_postback(event):
     if action == "quick_input_kakeibo":
         reply_line(event.reply_token, "支出を入力します。\n【送信例】\n・支出 1200 ラーメン\n・支出 500 コンビニ")
         return
-
     if action == "quick_input_memo":
-        reply_line(event.reply_token, "メモを追加します。\n「メモ 」に続けて内容を送ってください。\n\n例: メモ 牛乳を買う")
+        reply_line(event.reply_token, "メモを追加します。\n「メモ 」に続けて内容を送ってください。\n例: メモ 牛乳を買う")
         return
-
     if action == "cancel_registration":
         user_states.pop(user_id, None)
         reply_line(event.reply_token, "操作をキャンセルしました。")
@@ -368,24 +436,21 @@ def handle_postback(event):
 
     if action == "start_monthly_budget_input":
         user_states[user_id] = {"step": "WAITING_MONTHLY_BUDGET"}
-        reply_line(event.reply_token, "📅 今月の全体予算を入力して送信してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
+        reply_line(event.reply_token, "📅 今月の全体予算を入力してください。例: 100000\nやめる場合は キャンセル")
         return
 
-    if action == "card_select_cat":
+    if action in ["card_select_cat", "card_batch_select"]:
         pending_id = params.get("pending_id")
-        if pending_id:
-            item = _pending_item_or_reply(event.reply_token, pending_id)
-            if not item:
-                return
+        item = _pending_item_or_reply(event.reply_token, pending_id) if pending_id else None
+        if pending_id and not item:
+            return
+        if item:
             card, store, amount, date_str = item["card"], item["store"], item["amount"], item["date"]
         else:
-            card, store, amount, date_str = (
-                params.get("card"), params.get("store"), params.get("amount"), params.get("date")
-            )
-        reply_line(event.reply_token, [
-            TextMessage(text="ジャンル選択へ進みます。"),
-            _card_category_flex(card, store, amount, date_str, pending_id),
-        ])
+            card, store, amount, date_str = params.get("card"), params.get("store"), params.get("amount"), params.get("date")
+        save_action = "card_batch_save" if action == "card_batch_select" else "kakeibo_save"
+        lead = "同じ店の未処理をまとめて分類します。" if action == "card_batch_select" else "ジャンル選択へ進みます。"
+        reply_line(event.reply_token, [TextMessage(text=lead), _card_category_flex(card, store, amount, date_str, pending_id, save_action)])
         return
 
     if action == "card_change_store_start":
@@ -396,18 +461,63 @@ def handle_postback(event):
                 return
             card, old_store, amount, date_str = item["card"], item["store"], item["amount"], item["date"]
         else:
-            card, old_store, amount, date_str = (
-                params.get("card"), params.get("store"), params.get("amount"), params.get("date")
-            )
+            card, old_store, amount, date_str = params.get("card"), params.get("store"), params.get("amount"), params.get("date")
         user_states[user_id] = {
-            "step": "WAITING_STORE_NAME_CHANGE",
-            "card": card,
-            "old_store": old_store,
-            "amount": amount,
-            "date": date_str,
-            "pending_id": pending_id,
+            "step": "WAITING_STORE_NAME_CHANGE", "card": card, "old_store": old_store,
+            "amount": amount, "date": date_str, "pending_id": pending_id,
         }
-        reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n（現在の仮名称: {old_store}）")
+        reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n現在: {old_store}")
+        return
+
+    if action in ["card_auto_on", "card_auto_off"]:
+        enabled = action == "card_auto_on"
+        success, message = card_rules.set_auto_register_by_page_id(params.get("rule_id"), enabled)
+        reply_line(event.reply_token, ("✅ " if success else "⚠️ ") + message)
+        return
+
+    if action == "card_reconcile_duplicate":
+        pending_id = params.get("pending_id")
+        if pending_id and card_queue.complete(pending_id):
+            messages = [TextMessage(text="既存の家計簿データと同一取引として照合し、未処理から削除しました。")]
+            messages.extend(_next_pending_messages(exclude_id=pending_id))
+            reply_line(event.reply_token, messages[:5])
+        else:
+            reply_line(event.reply_token, "未処理カードの照合処理に失敗しました。")
+        return
+
+    if action in ["kakeibo_save", "kakeibo_save_force"]:
+        pending_id = params.get("pending_id")
+        category = params.get("cat")
+        if pending_id:
+            result = card_phase1.classify_one(pending_id, category, force_duplicate=(action == "kakeibo_save_force"))
+            messages = _card_save_result_messages(result, pending_id, category)
+            if messages is None:
+                _reply_already_processed(event.reply_token, pending_id)
+            else:
+                reply_line(event.reply_token, messages)
+            return
+
+        res_msg = kakeibo.save_kakeibo_to_notion(
+            params.get("card"), params.get("store"), params.get("amount"), params.get("date"), category
+        )
+        reply_line(event.reply_token, [TextMessage(text=f"📌「{category}」を選択しました。"), TextMessage(text=res_msg)])
+        return
+
+    if action == "card_batch_save":
+        pending_id = params.get("pending_id")
+        category = params.get("cat")
+        result = card_phase1.classify_same_store(pending_id, category)
+        if result.get("status") == "missing":
+            _reply_already_processed(event.reply_token, pending_id)
+            return
+        text = (
+            f"✅ 同じ店のカード利用をまとめて処理しました。\n"
+            f"対象: {result['total']}件\n保存: {result['saved']}件\n"
+            f"既存家計簿と照合: {result['reconciled']}件\n失敗・未処理のまま: {result['failed']}件"
+        )
+        messages = [TextMessage(text=text)]
+        messages.extend(_next_pending_messages())
+        reply_line(event.reply_token, messages[:5])
         return
 
     if action == "prepare_delete_memo":
@@ -418,7 +528,6 @@ def handle_postback(event):
             return
         reply_line(event.reply_token, [memo.create_memo_delete_confirm_flex(page_id, title)])
         return
-
     if action in ["confirm_delete_memo", "delete_memo"]:
         page_id = params.get("id")
         title = params.get("title", "メモ")
@@ -426,65 +535,20 @@ def handle_postback(event):
         reply_line(event.reply_token, f"🗑️ メモ「{title}」を削除しました。" if success else "メモの削除に失敗しました。")
         return
 
-    if action == "kakeibo_save":
-        pending_id = params.get("pending_id")
-        if pending_id:
-            item = _pending_item_or_reply(event.reply_token, pending_id)
-            if not item:
-                return
-            card, store, amount, date_str = item["card"], item["store"], item["amount"], item["date"]
-        else:
-            card, store, amount, date_str = (
-                params.get("card"), params.get("store"), params.get("amount"), params.get("date")
-            )
-
-        category = params.get("cat")
-        res_msg = kakeibo.save_kakeibo_to_notion(card, store, amount, date_str, category)
-        success = res_msg.startswith("家計簿に記録しました！")
-        messages = [
-            TextMessage(text=f"📌「{category}」を選択しました。"),
-            TextMessage(text=res_msg),
-        ]
-
-        if success and pending_id:
-            removed = card_queue.complete(pending_id)
-            if not removed:
-                messages[1] = TextMessage(text=res_msg + "\n\n⚠️ 家計簿保存は成功しましたが、未処理キューの削除に失敗しました。")
-
-        alerts = insights.get_budget_alerts()
-        if alerts:
-            messages.append(insights.create_budget_alert_flex())
-
-        if success and pending_id:
-            messages.extend(_next_pending_messages(exclude_id=pending_id))
-        reply_line(event.reply_token, messages[:5])
-        return
-
     if action == "manual_cat_select" and user_id in user_states:
         selected_cat = params.get("val")
         user_states[user_id]["category"] = selected_cat
         user_states[user_id]["step"] = "MANUAL_KAKEIBO_CARD"
-        cards = kakeibo.get_notion_select_options(
-            NOTION_KAKEIBO_DATABASE_ID, "カード・支払方法"
-        ) or ["現金", "JCB", "三井住友カード", "PayPay", "楽天カード"]
-        reply_line(event.reply_token, [
-            TextMessage(text=f"📌「{selected_cat}」を選択しました。"),
-            ui.create_choice_flex("支払方法を選択してください", cards, "manual_card_select", include_cancel=True),
-        ])
+        cards = kakeibo.get_notion_select_options(NOTION_KAKEIBO_DATABASE_ID, "カード・支払方法") or ["現金", "JCB", "三井住友カード", "PayPay", "楽天カード"]
+        reply_line(event.reply_token, [TextMessage(text=f"📌「{selected_cat}」を選択しました。"), ui.create_choice_flex("支払方法を選択してください", cards, "manual_card_select", include_cancel=True)])
         return
 
     if action == "manual_card_select" and user_id in user_states:
         selected_card = params.get("val")
         state_data = user_states[user_id]
-        res_msg = kakeibo.save_kakeibo_to_notion(
-            selected_card, state_data["store"], state_data["amount"],
-            state_data["date"], state_data["category"]
-        )
+        res_msg = kakeibo.save_kakeibo_to_notion(selected_card, state_data["store"], state_data["amount"], state_data["date"], state_data["category"])
         del user_states[user_id]
-        messages = [
-            TextMessage(text=f"💳「{selected_card}」を選択しました。"),
-            TextMessage(text=res_msg),
-        ]
+        messages = [TextMessage(text=f"💳「{selected_card}」を選択しました。"), TextMessage(text=res_msg)]
         alerts = insights.get_budget_alerts()
         if alerts:
             messages.append(insights.create_budget_alert_flex())
@@ -503,11 +567,7 @@ def handle_message(event):
         if user_message == "キャンセル":
             reply_line(reply_token, "AI改善の登録をキャンセルしました。")
             return
-        success, message = ai_feedback.save_feedback(
-            state["question"],
-            state["answer"],
-            user_message,
-        )
+        success, message = ai_feedback.save_feedback(state["question"], state["answer"], user_message)
         if success:
             ai_feedback.clear_last_ai_interaction(user_id)
             reply_line(reply_token, f"✅ {message}\n\n今後、似たAI質問ではこの改善例を自動で参考にします。")
@@ -522,22 +582,10 @@ def handle_message(event):
     if user_message in ["AI改善", "AIフィードバック", "AI修正"]:
         last = ai_feedback.get_last_ai_interaction(user_id)
         if not last:
-            reply_line(reply_token, "改善対象の直前AI回答がありません。\n先に「AI 質問内容」でAIへ質問して、その回答後に「AI改善」と送ってください。")
+            reply_line(reply_token, "改善対象の直前AI回答がありません。先に「AI 質問内容」で質問してください。")
             return
-        user_states[user_id] = {
-            "step": "WAITING_AI_FEEDBACK",
-            "question": last["question"],
-            "answer": last["answer"],
-        }
-        reply_line(
-            reply_token,
-            "🧠 AI改善を記録します。\n\n"
-            f"【あなたの質問】\n{last['question']}\n\n"
-            f"【AIの回答】\n{last['answer'][:800]}\n\n"
-            "本当はどのように答えてほしかったですか？\n"
-            "理想の回答、含めてほしい情報、判断方法、書き方などをそのまま送ってください。\n"
-            "やめる場合は「キャンセル」と送信してください。"
-        )
+        user_states[user_id] = {"step": "WAITING_AI_FEEDBACK", "question": last["question"], "answer": last["answer"]}
+        reply_line(reply_token, f"🧠 AI改善を記録します。\n\n【質問】\n{last['question']}\n\n【AI回答】\n{last['answer'][:800]}\n\n本当はどのように答えてほしかったですか？")
         return
 
     if user_message in ["カード未処理", "カード保留", "カード未分類"]:
@@ -546,10 +594,15 @@ def handle_message(event):
             reply_line(reply_token, "✅ ジャンル未選択のカード利用はありません。")
         else:
             item = card_queue.get_next_pending()
-            reply_line(reply_token, [
-                TextMessage(text=f"💳 ジャンル未選択が {count} 件あります。古いものから1件ずつ処理します。"),
-                _card_category_flex(item["card"], item["store"], item["amount"], item["date"], item["id"]),
-            ])
+            reply_line(reply_token, [TextMessage(text=f"💳 ジャンル未選択が {count} 件あります。古いものから処理します。"), _card_category_flex(item["card"], item["store"], item["amount"], item["date"], item["id"])])
+        return
+
+    if user_message in ["カード自動登録", "カード学習", "カードルール"]:
+        rules = card_rules.get_rules(limit=20)
+        if not os.environ.get("NOTION_CARD_RULES_DATABASE_ID"):
+            reply_line(reply_token, "カード学習ルールDBが未設定です。SETUP.mdの `NOTION_CARD_RULES_DATABASE_ID` を設定してください。")
+        else:
+            reply_line(reply_token, [ui.create_card_rules_flex(rules)])
         return
 
     if user_message in ["今月", "ダッシュボード", "家計簿ダッシュボード", "今月の家計簿"]:
@@ -592,9 +645,7 @@ def handle_message(event):
                     del user_states[user_id]
                     _reply_already_processed(reply_token, pending_id)
                     return
-                flex_msg = _card_category_flex(
-                    state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"], pending_id
-                )
+                flex_msg = _card_category_flex(state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"], pending_id)
                 store = state_data["old_store"]
                 del user_states[user_id]
                 reply_line(reply_token, [f"店名変更をキャンセルしました。（元の名称: {store}）", flex_msg])
@@ -613,9 +664,7 @@ def handle_message(event):
             return
         if pending_id:
             card_queue.update_store(pending_id, user_message)
-        flex_msg = _card_category_flex(
-            state_data["card"], user_message, state_data["amount"], state_data["date"], pending_id
-        )
+        flex_msg = _card_category_flex(state_data["card"], user_message, state_data["amount"], state_data["date"], pending_id)
         reply_line(reply_token, [TextMessage(text=f"店名を「{user_message}」に変更しました。"), flex_msg])
         return
 
@@ -625,12 +674,9 @@ def handle_message(event):
             target_month = datetime.now(JST).strftime("%Y-%m")
             success = kakeibo.set_budget_in_notion(target_month, budget_amount, category=None)
             del user_states[user_id]
-            if success:
-                reply_line(reply_token, f"設定完了！\n{target_month} の全体予算を ¥{budget_amount:,} に設定しました。")
-            else:
-                reply_line(reply_token, "予算の保存に失敗しました。Notionの月別管理DBを確認してください。")
+            reply_line(reply_token, f"設定完了！\n{target_month} の全体予算を ¥{budget_amount:,} に設定しました。" if success else "予算の保存に失敗しました。")
         else:
-            reply_line(reply_token, "金額は半角の数字のみで入力してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
+            reply_line(reply_token, "金額は半角の数字のみで入力してください。例: 100000")
         return
 
     if user_message.startswith("メモ ") or user_message.startswith("メモ　"):
@@ -648,7 +694,7 @@ def handle_message(event):
             for m in memos:
                 date_text = f" ({m.get('date', '')[:10]})" if m.get("date") else ""
                 lines.append(f"・{m['title']}{date_text}")
-            lines.append("\n※ メモ削除 と送信すると、確認画面付きで削除できます。")
+            lines.append("\n※ メモ削除 と送信すると確認付きで削除できます。")
             reply_line(reply_token, "\n".join(lines))
         return
 
@@ -662,12 +708,12 @@ def handle_message(event):
             reply_line(reply_token, [budget.create_budget_overview_flex()])
         except Exception as e:
             print(f"予算一覧エラー: {e}")
-            reply_line(reply_token, "予算一覧の取得に失敗しました。Notionの月別管理DBと家計簿DBを確認してください。")
+            reply_line(reply_token, "予算一覧の取得に失敗しました。")
         return
 
     if user_message in ["予算設定", "予算を設定"]:
         user_states[user_id] = {"step": "WAITING_MONTHLY_BUDGET"}
-        reply_line(reply_token, "今月の全体予算を数字で送信してください。\n例: 100000\n\nジャンル別は「予算 食費 30000」のように送信できます。")
+        reply_line(reply_token, "今月の全体予算を数字で送信してください。例: 100000\nジャンル別は「予算 食費 30000」")
         return
 
     if user_message.startswith("予算"):
@@ -684,52 +730,32 @@ def handle_message(event):
                 category, budget_val = parts[1], parts[2]
         elif len(parts) >= 4:
             target_month, category, budget_val = parts[1], parts[2], parts[3]
-
         if budget_val and budget_val.isdigit():
             success = kakeibo.set_budget_in_notion(target_month, int(budget_val), category)
             target_label = f"{category} の" if category else "全体の"
-            reply_text = (
-                f"予算設定完了\n{target_month} の{target_label}予算を ¥{int(budget_val):,} に設定しました"
-                if success else "予算設定に失敗しました。Notionの月別管理DBを確認してください"
-            )
+            reply_text = f"予算設定完了\n{target_month} の{target_label}予算を ¥{int(budget_val):,} に設定しました" if success else "予算設定に失敗しました。"
         else:
-            reply_text = "【予算設定の使い方】\n・一覧表示: 予算一覧\n・全体予算: 予算 100000\n・ジャンル別: 予算 食費 30000\n・年月指定: 予算 2026-10 食費 35000"
+            reply_text = "【予算設定】\n・予算 100000\n・予算 食費 30000\n・予算 2026-10 食費 35000"
         reply_line(reply_token, reply_text)
         return
 
     if user_message.startswith("固定費追加"):
         parts = user_message.replace("　", " ").split()
         if len(parts) >= 3 and parts[2].isdigit():
-            store_name = parts[1]
-            amount = float(parts[2])
+            store_name, amount = parts[1], float(parts[2])
             category = parts[3] if len(parts) >= 4 else "固定費"
             card_name = parts[4] if len(parts) >= 5 else "現金"
             success = kakeibo.add_fixed_expense_to_notion(store_name, amount, category, card_name)
-            if success:
-                reply_text = (
-                    f"【固定費マスタに追加しました】\n・内容: {store_name}\n・金額: ¥{int(amount):,}\n"
-                    f"・ジャンル: {category}\n・支払方法: {card_name}\n\n"
-                    "※ 次回の 固定費 一括登録から自動で反映されます。"
-                )
-            else:
-                reply_text = "固定費マスタへの追加に失敗しました。Notionの設定を確認してください。"
+            reply_text = f"【固定費マスタに追加しました】\n・内容: {store_name}\n・金額: ¥{int(amount):,}\n・ジャンル: {category}\n・支払方法: {card_name}" if success else "固定費マスタへの追加に失敗しました。"
         else:
-            reply_text = (
-                "【固定費追加の使い方】\n固定費追加 店名 金額 [ジャンル] [支払方法]\n\n"
-                "例: 固定費追加 ジム会費 8000 固定費 三井住友カード\n"
-                "例: 固定費追加 Netflix 1490 サブスク JCB"
-            )
+            reply_text = "【固定費追加】\n固定費追加 店名 金額 [ジャンル] [支払方法]\n例: 固定費追加 Netflix 1490 サブスク JCB"
         reply_line(reply_token, reply_text)
         return
 
     if user_message in ["固定費", "固定費登録", "固定費 登録", "固定費　登録"]:
         count, total = kakeibo.register_monthly_fixed_expenses()
         today_month = datetime.now(JST).strftime("%Y-%m")
-        if count > 0:
-            reply_text = f"今月分（{today_month}）の固定費・サブスクを一括登録しました！\n・件数: {count} 件\n・合計: ¥{total:,}"
-        else:
-            reply_text = "登録対象の固定費が見つかりませんでした。Notionの固定費マスタを確認してください。"
-        reply_line(reply_token, reply_text)
+        reply_line(reply_token, f"今月分（{today_month}）の固定費・サブスクを一括登録しました！\n・件数: {count} 件\n・合計: ¥{total:,}" if count > 0 else "登録対象の固定費が見つかりませんでした。")
         return
 
     if user_message in ["固定費一覧", "固定費確認"]:
@@ -743,7 +769,6 @@ def handle_message(event):
                 lines.append(f"・{item['store_name']}: ¥{int(item['amount']):,} ({item['card_name']})")
                 total += item["amount"]
             lines.append(f"\n合計: ¥{int(total):,}/月")
-            lines.append("\n※ LINEで 固定費 と送信すると、今月の家計簿へ一括登録されます。")
             reply_line(reply_token, "\n".join(lines))
         return
 
@@ -754,7 +779,6 @@ def handle_message(event):
     if user_id in user_states:
         state_data = user_states[user_id]
         step = state_data.get("step")
-
         if step == "SELECT_DB":
             if user_message.isdigit():
                 idx = int(user_message) - 1
@@ -763,21 +787,14 @@ def handle_message(event):
                     selected_db_id = db_list[idx]
                     props = notion_helper.get_database_properties(selected_db_id)
                     if not props:
-                        reply_line(reply_token, "プロパティの取得に失敗しました。最初からやり直してください。")
+                        reply_line(reply_token, "プロパティの取得に失敗しました。")
                         del user_states[user_id]
                         return
-                    state_data.update({
-                        "selected_db_id": selected_db_id,
-                        "properties": props,
-                        "current_prop_index": 0,
-                        "collected_data": {},
-                        "step": "INPUT_PROPERTY",
-                    })
+                    state_data.update({"selected_db_id": selected_db_id, "properties": props, "current_prop_index": 0, "collected_data": {}, "step": "INPUT_PROPERTY"})
                     reply_line(reply_token, f"{props[0][0]} は何ですか？")
                     return
-            reply_line(reply_token, "有効な番号を送信してください。（中断する場合は キャンセル と送信してください）")
+            reply_line(reply_token, "有効な番号を送信してください。")
             return
-
         if step == "INPUT_PROPERTY":
             props = state_data["properties"]
             curr_idx = state_data["current_prop_index"]
@@ -789,82 +806,45 @@ def handle_message(event):
                 reply_line(reply_token, f"{props[next_idx][0]} は何ですか？")
             else:
                 state_data["step"] = "CONFIRM"
-                confirm_lines = ["【入力内容の確認】"]
-                for p_name, val in state_data["collected_data"].items():
-                    confirm_lines.append(f"{p_name}: {val}")
-                confirm_lines.append("\nこの内容でデータベースに追加してよろしいですか？\n( はい / いいえ )")
-                reply_line(reply_token, "\n".join(confirm_lines))
+                lines = ["【入力内容の確認】"] + [f"{k}: {v}" for k, v in state_data["collected_data"].items()]
+                lines.append("\nこの内容で追加しますか？ (はい / いいえ)")
+                reply_line(reply_token, "\n".join(lines))
             return
-
         if step == "CONFIRM":
             if user_message == "はい":
-                success = notion_helper.create_notion_page(
-                    state_data["selected_db_id"], state_data["collected_data"],
-                    {p[0]: p[1] for p in state_data["properties"]}
-                )
+                success = notion_helper.create_notion_page(state_data["selected_db_id"], state_data["collected_data"], {p[0]: p[1] for p in state_data["properties"]})
                 del user_states[user_id]
-                reply_line(reply_token, "データベースに正常に追加しました！" if success else "登録に失敗しました。Notionの書き込み権限等を確認してください。")
+                reply_line(reply_token, "データベースに正常に追加しました！" if success else "登録に失敗しました。")
             elif user_message == "いいえ":
                 reply_line(reply_token, "登録をキャンセルし、最初からやり直します。")
                 start_db_selection(user_id, reply_token)
             else:
-                reply_line(reply_token, "はい または いいえ で送信してください。（中断する場合は キャンセル と送信してください）")
+                reply_line(reply_token, "はい または いいえ で送信してください。")
             return
 
     if user_message.startswith("http://") or user_message.startswith("https://"):
         reply_line(reply_token, notion_helper.add_url_to_notion(user_message))
         return
-
     if user_message in ["リンク", "Notion", "notion", "Notionリンク", "notionリンク"]:
         reply_line(reply_token, f"Notionのページはこちらです:\n{NOTION_PAGE_URL}" if NOTION_PAGE_URL else "NotionのURLが設定されていません。")
         return
-
     if user_message == "データ追加":
         start_db_selection(user_id, reply_token)
         return
 
     if user_message in ["ヘルプ", "help", "Help", "使い方"]:
         help_text = (
-            "【Notionアシスタントの使い方】\n\n"
-            "◆ 家計簿\n"
-            "・今月: 家計簿ダッシュボード\n"
-            "・週次レポート: 直近7日と前7日を比較\n"
-            "・予算アラート: 80% / 90% / 100%を確認\n"
-            "・支出入力: 支出 1200 ラーメン\n"
-            "・カード未処理: ジャンル未選択カードを1件ずつ処理\n"
-            "・予算一覧: 予算一覧\n"
-            "・全体予算: 予算 100000\n"
-            "・ジャンル予算: 予算 食費 30000\n"
-            "・固定費一覧: 固定費一覧\n"
-            "・固定費一括登録: 固定費\n\n"
-            "◆ メモ\n"
-            "・追加: メモ 卵を買う\n"
-            "・一覧: メモ一覧\n"
-            "・削除: メモ削除（確認あり）\n\n"
-            "◆ Notion\n"
-            "・データ追加: データ追加\n"
-            "・URL保存: URLをそのまま送信\n"
-            "・Notionリンク: Notion\n\n"
-            "◆ AI検索\n"
-            "・質問: AI 質問内容\n"
-            "・回答改善: AI改善\n"
-            "AIは「AI 」を付けた質問だけGeminiを使用します。"
+            "【Notionアシスタント】\n\n◆ 家計簿\n・今月\n・週次レポート\n・予算アラート\n・支出 1200 ラーメン\n"
+            "・カード未処理\n・カード自動登録\n・予算一覧\n・固定費一覧\n\n"
+            "◆ メモ\n・メモ 卵を買う\n・メモ一覧\n・メモ削除\n\n"
+            "◆ AI\n・AI 質問内容\n・AI改善"
         )
         reply_line(reply_token, help_text)
         return
 
     if user_message.lower() == "ai":
-        reply_line(
-            reply_token,
-            "【AI検索の使い方】\n"
-            "AIの後に半角または全角スペースを入れて質問してください。\n\n"
-            "例: AI 今月の食費について分析して\n"
-            "例: AI メモの内容を整理して\n\n"
-            "回答が期待と違った場合は、その直後に「AI改善」と送ってください。\n"
-            "過去の改善例は、似た質問の回答品質向上に利用されます。"
-        )
+        reply_line(reply_token, "【AI検索】\nAIの後にスペースを入れて質問してください。\n例: AI 今月の食費について分析して\n回答が違う場合は AI改善")
         return
-
     ai_match = re.match(r"^AI[ \u3000]+(.+)$", user_message, flags=re.IGNORECASE)
     if ai_match:
         ai_query = ai_match.group(1).strip()
@@ -872,10 +852,7 @@ def handle_message(event):
             _run_ai_search(user_id, reply_token, ai_query)
             return
 
-    reply_line(reply_token, [
-        TextMessage(text="そのコマンドはありません。メニューから機能を選んでください。\nAIを使う場合は「AI 質問内容」と送信してください。"),
-        menu.create_main_menu_flex(),
-    ])
+    reply_line(reply_token, [TextMessage(text="そのコマンドはありません。メニューから機能を選んでください。\nAIを使う場合は「AI 質問内容」と送信してください。"), menu.create_main_menu_flex()])
 
 
 if __name__ == "__main__":
