@@ -5,7 +5,11 @@ from linebot.v3.messaging import FlexMessage, FlexContainer
 
 
 def create_choice_flex(title, options, callback_action, extra_params=None, include_cancel=False):
-    """長い日本語ラベルが見切れにくい1列・全幅の選択UI。"""
+    """長い日本語ラベルが見切れにくい1列・全幅の選択UI。
+
+    選択肢に優先順位がない画面では、すべて secondary に統一します。
+    これにより先頭だけ緑色になる不自然な見た目を避けます。
+    """
     extra_params = extra_params or {}
     buttons = []
 
@@ -13,7 +17,7 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
         params = {"action": callback_action, "val": option, **extra_params}
         buttons.append({
             "type": "button",
-            "style": "primary",
+            "style": "secondary",
             "height": "sm",
             "action": {
                 "type": "postback",
@@ -42,7 +46,7 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
             "layout": "vertical",
             "contents": [
                 {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
-                {"type": "text", "text": "項目名を見やすくするため1列表示にしています", "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
+                {"type": "text", "text": "選択肢は1列・同じ見た目で表示しています", "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
             ],
         },
         "body": {
@@ -74,7 +78,7 @@ def create_card_category_flex(card, store, amount, date_str, categories):
         })
         buttons.append({
             "type": "button",
-            "style": "primary",
+            "style": "secondary",
             "height": "sm",
             "action": {"type": "postback", "label": category[:20], "data": data},
         })
