@@ -19,7 +19,7 @@ def classify_one(pending_id, category, force_duplicate=False):
         return {"status": "missing"}
 
     duplicate = None if force_duplicate else ledger_guard.find_duplicate(
-        item["card"], item["store"], item["amount"], item["date"]
+        item["card"], item["store"], item["amount"], item["date"], candidate_check=True
     )
     if duplicate:
         return {"status": "duplicate", "item": item, "duplicate": duplicate}
@@ -50,7 +50,9 @@ def classify_same_store(pending_id, category):
     failed = 0
 
     for item in targets:
-        duplicate = ledger_guard.find_duplicate(item["card"], item["store"], item["amount"], item["date"])
+        duplicate = ledger_guard.find_duplicate(
+            item["card"], item["store"], item["amount"], item["date"], candidate_check=True
+        )
         if duplicate:
             needs_review += 1
             continue
@@ -73,7 +75,6 @@ def classify_same_store(pending_id, category):
         "saved": saved,
         "reconciled": 0,
         "needs_review": needs_review,
-        # 現行UIでは「失敗・未処理のまま」にまとめて表示するため、要確認も含める。
         "failed": failed + needs_review,
     }
 
@@ -90,7 +91,9 @@ def try_auto_register(pending_id):
     if not suggestion or not suggestion.get("can_auto_register"):
         return {"status": "manual", "item": item, "suggestion": suggestion}
 
-    duplicate = ledger_guard.find_duplicate(item["card"], item["store"], item["amount"], item["date"])
+    duplicate = ledger_guard.find_duplicate(
+        item["card"], item["store"], item["amount"], item["date"], candidate_check=True
+    )
     if duplicate:
         return {"status": "manual_duplicate", "item": item, "duplicate": duplicate, "suggestion": suggestion}
 
