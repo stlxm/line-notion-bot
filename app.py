@@ -19,6 +19,7 @@ import kakeibo
 import notion_helper
 import memo
 import menu
+import budget
 
 app = Flask(__name__)
 
@@ -29,6 +30,7 @@ NOTION_PAGE_URL = os.environ.get("NOTION_PAGE_URL", "")
 NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 NOTION_KAKEIBO_DATABASE_ID = os.environ.get("NOTION_KAKEIBO_DATABASE_ID", "")
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
+SCHEDULER_SECRET = os.environ.get("SCHEDULER_SECRET", "")
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -71,6 +73,40 @@ def api_monthly_notice():
                 )
             )
     return json.dumps({"status": "success", "message": "Monthly notice triggered"}), 200
+
+
+def _scheduler_authorized():
+    """GAS等から呼ぶ定期通知APIを共通秘密鍵で保護します。"""
+    if not SCHEDULER_SECRET:
+        return False
+    return request.headers.get("X-API-KEY", "") == SCHEDULER_SECRET
+
+
+@app.route("/api/daily-memo", methods=["POST"])
+def api_daily_memo():
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+
+    if not ADMIN_USER_ID:
+        return json.dumps({"status": "error", "message": "ADMIN_USER_ID is not configured"}), 500
+
+    memos = memo.get_memos_from_notion()
+    if memos:
+        lines = ["📝 今日のメモ一覧", ""]
+        for item in memos[:30]:
+            lines.append(f"・{item['title']}")
+        if len(memos) > 30:
+            lines.append(f"\nほか {len(memos) - 30} 件あります。")
+        lines.append("\n不要なものは「メモ削除」で整理できます。")
+        message = "\n".join(lines)
+    else:
+        message = "📝 今日のメモ一覧\n\n現在保存されているメモはありません。"
+
+    try:
+        push_line(ADMIN_USER_ID, message)
+        return json.dumps({"status": "success", "count": len(memos)}), 200
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}), 500
 
 
 def reply_line(reply_token, messages):
@@ -117,6 +153,29 @@ def push_line(user_id, messages):
         )
 
 
+def start_db_selection(user_id, reply_token):
+    """汎用データ追加で登録先DBを選択する処理。"""
+    db_list = [db_id.strip() for db_id in NOTION_DATABASE_IDS.split(",") if db_id.strip()]
+    if not db_list:
+        reply_line(reply_token, "登録先データベースが設定されていません。NOTION_DATABASE_IDS を確認してください。")
+        return
+
+    display_names = []
+    for db_id in db_list:
+        display_names.append(notion_helper.get_database_title(db_id))
+
+    user_states[user_id] = {
+        "step": "SELECT_DB",
+        "db_list": db_list,
+    }
+
+    lines = ["追加するデータベースを番号で選んでください。"]
+    for index, title in enumerate(display_names, start=1):
+        lines.append(f"{index}. {title}")
+    lines.append("\nやめる場合は「キャンセル」と送信してください。")
+    reply_line(reply_token, "\n".join(lines))
+
+
 def start_manual_kakeibo(user_id, reply_token, text):
     parts = text.replace(" ", " ").strip().split()
     if len(parts) < 2:
@@ -161,6 +220,13 @@ def handle_postback(event):
         reply_line(
             event.reply_token,
             "支出を入力します。\n【送信例】\n・支出 1200 ラーメン\n・支出 500"
+        )
+        return
+
+    if action == "quick_input_memo":
+        reply_line(
+            event.reply_token,
+            "メモを追加します。\n「メモ 」に続けて内容を送ってください。\n\n例: メモ 牛乳を買う"
         )
         return
 
@@ -321,7 +387,7 @@ def handle_message(event):
             reply_line(reply_token, "金額は半角の数字のみで入力してください。\n（例: 100000）\n※やめる場合は キャンセル と送信してください")
             return
 
-    if user_message.startswith("メモ ") or user_message.startswith("メモ "):
+    if user_message.startswith("メモ ") or user_message.startswith("メモ　"):
         memo_text = user_message[3:].strip()
         if memo_text:
             res_text = memo.add_memo_to_notion(memo_text)
@@ -340,7 +406,7 @@ def handle_message(event):
             reply_line(reply_token, "\n".join(lines))
         return
 
-    if user_message in ["メモ削除", "メモ 削除", "メモ 削除"]:
+    if user_message in ["メモ削除", "メモ 削除", "メモ　削除"]:
         flex_msg = memo.create_memo_delete_flex()
         if flex_msg:
             reply_line(reply_token, [flex_msg])
@@ -348,8 +414,25 @@ def handle_message(event):
             reply_line(reply_token, "削除できるメモがありません。")
         return
 
+    if user_message in ["予算一覧", "予算確認", "今月の予算"]:
+        try:
+            flex_msg = budget.create_budget_overview_flex()
+            reply_line(reply_token, [flex_msg])
+        except Exception as e:
+            print(f"予算一覧エラー: {e}")
+            reply_line(reply_token, "予算一覧の取得に失敗しました。Notionの月別管理DBと家計簿DBを確認してください。")
+        return
+
+    if user_message in ["予算設定", "予算を設定"]:
+        user_states[user_id] = {"step": "WAITING_MONTHLY_BUDGET"}
+        reply_line(
+            reply_token,
+            "今月の全体予算を数字で送信してください。\n例: 100000\n\nジャンル別は「予算 食費 30000」のように送信できます。"
+        )
+        return
+
     if user_message.startswith("予算"):
-        parts = user_message.replace(" ", " ").split()
+        parts = user_message.replace("　", " ").split()
         jst = timezone(timedelta(hours=+9), "JST")
         current_month = datetime.now(jst).strftime("%Y-%m")
         target_month = current_month
@@ -376,15 +459,15 @@ def handle_message(event):
             if success:
                 reply_text = f"予算設定完了\n{target_month} の{target_label}予算を ¥{int(budget_val):,} に設定しました"
             else:
-                reply_text = f"予算設定に失敗しました。Notionの月別管理DBを確認してください"
+                reply_text = "予算設定に失敗しました。Notionの月別管理DBを確認してください"
         else:
-            reply_text = "【予算設定の使い方】\n・全体予算: 予算 100000\n・ジャンル別: 予算 食費 30000\n・年月指定: 予算 2026-10 食費 35000"
+            reply_text = "【予算設定の使い方】\n・一覧表示: 予算一覧\n・全体予算: 予算 100000\n・ジャンル別: 予算 食費 30000\n・年月指定: 予算 2026-10 食費 35000"
 
         reply_line(reply_token, reply_text)
         return
 
     if user_message.startswith("固定費追加"):
-        parts = user_message.replace(" ", " ").split()
+        parts = user_message.replace("　", " ").split()
         if len(parts) >= 3 and parts[2].isdigit():
             store_name = parts[1]
             amount = float(parts[2])
@@ -413,7 +496,7 @@ def handle_message(event):
         reply_line(reply_token, reply_text)
         return
 
-    if user_message in ["固定費", "固定費登録", "固定費 登録", "固定費 登録"]:
+    if user_message in ["固定費", "固定費登録", "固定費 登録", "固定費　登録"]:
         count, total = kakeibo.register_monthly_fixed_expenses()
         jst = timezone(timedelta(hours=+9), "JST")
         today_month = datetime.now(jst).strftime("%Y-%m")
@@ -533,26 +616,30 @@ def handle_message(event):
     if user_message in ["ヘルプ", "help", "Help", "使い方"]:
         help_text = (
             "【Notionアシスタントの使い方】\n\n"
-            "◆ メニュー呼び出し\n"
-            "メニュー と送信するとカード型の機能選択ボタンが表示されます。\n\n"
-            "◆ データ検索\n"
-            "知りたい情報をそのまま質問してください。\n"
-            "例: 今月の食費合計は？ / 楽天カードの利用履歴教えて\n\n"
-            "◆ メモ機能\n"
+            "◆ メニュー\n"
+            "メニュー と送信すると全機能を1画面で確認できます。\n\n"
+            "◆ 家計簿\n"
+            "・支出入力: 支出 1200 ラーメン\n"
+            "・予算一覧: 予算一覧\n"
+            "・全体予算: 予算 100000\n"
+            "・ジャンル予算: 予算 食費 30000\n"
+            "・固定費一覧: 固定費一覧\n"
+            "・固定費一括登録: 固定費\n\n"
+            "◆ メモ\n"
             "・追加: メモ 卵を買う\n"
             "・一覧: メモ一覧\n"
             "・削除: メモ削除\n\n"
-            "◆ 手動で支出記録\n"
-            "支出 金額 店名（例: 支出 1200 ラーメン）\n\n"
-            "◆ 固定費の一括登録・追加\n"
-            "・一括登録: 固定費\n"
-            "・一覧確認: 固定費一覧\n"
-            "・新規追加: 固定費追加 ジム会費 8000 固定費 三井住友カード"
+            "◆ Notion\n"
+            "・データ追加: データ追加\n"
+            "・URL保存: URLをそのまま送信\n"
+            "・Notionリンク: Notion\n\n"
+            "◆ AI検索\n"
+            "知りたい情報をそのまま質問してください。"
         )
         reply_line(reply_token, help_text)
         return
 
-    # 16. 通常検索（重いAI・Notion検索を非同期バックグラウンドで実行）
+    # 通常検索（重いAI・Notion検索を非同期バックグラウンドで実行）
     reply_line(reply_token, "最大60秒お待ちください…データを検索・処理しています。")
 
     def background_ai_search(uid, msg):
@@ -565,21 +652,16 @@ def handle_message(event):
             except Exception as e:
                 result_container["response"] = f"エラーが発生しました: {str(e)}"
 
-        # 別スレッドで実際の処理を実行
         t = threading.Thread(target=target_task)
         t.start()
-        # 最大60秒間完了を待機する
         t.join(timeout=60)
 
         if t.is_alive():
-            # 60秒以内に終わらなかった場合
             push_line(uid, "申し訳ありません。60秒のタイムアウト制限を超えたため処理を中断しました。もう一度やり直してください。")
         else:
-            # 正常に完了した場合
             final_response = result_container.get("response", "応答の生成に失敗しました。")
             push_line(uid, final_response)
 
-    # バックグラウンドスレッドを起動
     thread = threading.Thread(target=background_ai_search, args=(user_id, user_message))
     thread.start()
 
