@@ -167,4 +167,7 @@ def get_item(page_id):
     res = requests.get(f"https://api.notion.com/v1/pages/{page_id}", headers=_headers(), timeout=10)
     if res.status_code != 200:
         return None
-    return _page_to_item(res.json())
+    data = res.json()
+    if data.get("archived") or data.get("in_trash"):
+        return None
+    return _page_to_item(data)
