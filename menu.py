@@ -25,7 +25,6 @@ def _section(title, description, buttons, color):
         {"type": "text", "text": title, "weight": "bold", "size": "md", "color": color, "margin": "lg", "wrap": True},
         {"type": "text", "text": description, "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
     ]
-    # 2列ではなく1列表示。長い日本語ラベルでも見切れにくい。
     contents.extend(buttons)
     return contents
 
@@ -71,10 +70,11 @@ def create_main_menu_flex():
     )
 
     body += _section(
-        "🤖 AI検索",
-        "API節約のため、明示的にAIを付けた質問だけGeminiを使います",
+        "🤖 AI検索・改善",
+        "明示した質問だけGeminiを使用。変な回答は改善ログへ残せます",
         [
             _message_button("AI検索の使い方", "AI", "primary"),
+            _message_button("直前のAI回答を改善", "AI改善"),
         ],
         "#F57C00",
     )
