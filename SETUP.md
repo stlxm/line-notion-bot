@@ -23,14 +23,13 @@ GAS checkCardEmails
 ↓
 Render /api/card-pending
 ├─ 固定費/サブスク除外
-├─ 家計簿重複照合
-├─ 未処理同一取引照合
-├─ 安全な自動登録
+├─ 安全な自動登録判定
 └─ カード未処理DB
      ↓
      LINEで分類
      ├─ おすすめジャンル
      ├─ 同じ店をまとめて分類
+     ├─ 重複候補確認
      ├─ 店名変更
      ├─ サブスク登録
      └─ 登録しない
@@ -40,13 +39,7 @@ Render /api/card-pending
 
 # 2. 必要サービス
 
-- GitHub
-- Render
-- LINE Developers / Messaging API
-- Notion
-- Gmail
-- Google Apps Script
-- Google AI Studio / Gemini API
+GitHub / Render / LINE Developers / Notion / Gmail / Google Apps Script / Google AI Studio
 
 ---
 
@@ -109,49 +102,38 @@ Botが使うすべてのDBへ同じIntegrationを接続し、読み取り・作�
 
 環境変数: `NOTION_CARD_PENDING_DATABASE_ID`
 
-Title列名は自動検出できますが、`GmailMessageID`を推奨します。
+Title列名は自動検出できますが`GmailMessageID`推奨です。
 
 ## カード学習ルールDB
 
-Phase 1のおすすめジャンル・自動登録に必要です。新しくDBを1つ作成してください。
+Phase 1のおすすすめジャンル・自動登録に必要です。
 
 | 名前 | 型 | 用途 |
 |---|---|---|
-| `店名キー` | Title | 正規化した店名。コードが自動保存 |
-| `表示名` | Rich text | 人が読む店名 |
-| `ジャンル` | Select | 現在のおすすめジャンル |
-| `学習回数` | Number | 手動分類した総回数 |
-| `一致回数` | Number | 現在ジャンルへの連続/一致回数 |
-| `自動登録` | Checkbox | ユーザーが明示ONした場合のみtrue |
+| `店名キー` | Title | 正規化店名 |
+| `表示名` | Rich text | 表示用店名 |
+| `ジャンル` | Select | 推奨ジャンル |
+| `学習回数` | Number | 手動分類回数 |
+| `一致回数` | Number | 現ジャンル一致回数 |
+| `自動登録` | Checkbox | 本人が明示ONした場合のみtrue |
 | `最終更新` | Date | 最終学習日時 |
 
-環境変数:
+Render:
 
 ```text
-NOTION_CARD_RULES_DATABASE_ID=<このDBのDatabase ID>
+NOTION_CARD_RULES_DATABASE_ID=<Database ID>
 CARD_AUTO_REGISTER_MIN_MATCHES=3
 ```
 
-`CARD_AUTO_REGISTER_MIN_MATCHES`は省略可能で、未設定時3です。
-
-重要: `カード学習ルール` DBは`NOTION_DATABASE_IDS`へ重複登録する必要はありません。
+`CARD_AUTO_REGISTER_MIN_MATCHES`は省略可能で、未設定時3です。カード学習ルールDBを`NOTION_DATABASE_IDS`へ重複登録する必要はありません。
 
 ## メモDB
 
-| 名前 | 型 |
-|---|---|
-| `メモ` | Title |
-| `日付` | Date |
-
-環境変数: `NOTION_MEMO_DATABASE_ID`
+`メモ` Title / `日付` Date。環境変数: `NOTION_MEMO_DATABASE_ID`
 
 ## URL保存DB
 
-| 名前 | 型 |
-|---|---|
-| `URL` | Title |
-
-環境変数: `NOTION_URL_DATABASE_ID`
+`URL` Title。環境変数: `NOTION_URL_DATABASE_ID`
 
 ## AI改善ログDB
 
@@ -189,21 +171,17 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
-Phase 1で追加必須なのは`NOTION_CARD_RULES_DATABASE_ID`です。`CARD_AUTO_REGISTER_MIN_MATCHES`は通常3のままで問題ありません。
-
 ---
 
-# 6. Google Apps Script
+# 6. GAS
 
-Apps ScriptへGitHub最新版をコピーします。
+Apps Scriptへ最新版をコピー:
 
 ```text
 gas/Code.gs
 gas/FinanceReports.gs
 gas/DailyMemo.gs
 ```
-
-GitHubの`.gs`は自動同期されません。GitHubで変更した場合はApps Script側にもコピーしてください。
 
 Script Properties:
 
@@ -214,6 +192,8 @@ RENDER_BASE_URL
 SCHEDULER_SECRET
 ```
 
+GitHubの`.gs`は通常GASへ自動同期されません。
+
 ---
 
 # 7. GASトリガー
@@ -222,119 +202,121 @@ SCHEDULER_SECRET
 |---|---|
 | `checkCardEmails` | 1時間ごと |
 | `sendDailyCardPendingReminder` | 毎日20〜21時 |
-| `sendMonthEndCardCheck` | 毎日21時ごろ |
+| `sendMonthEndCardCheck` | 毎日21時 |
 | `sendDailyMemoReminder` | 毎日朝8時 |
 | `sendDailyBudgetAlert` | 毎日20時 |
 | `sendWeeklyFinanceReport` | 毎週日曜20時 |
 
-`sendMonthEndCardCheck`は毎日呼んでも、Render側が月末以外は何も通知しません。月末だけ未処理0件または残件数を通知します。
+`sendMonthEndCardCheck`は毎日実行しても、Render側が月末以外は通知しません。
 
 ---
 
-# 8. Phase 1の動作
+# 8. Phase 1カード自動化
 
-## おすすめジャンル
+## 学習・おすすめ
 
-カード未処理を手動分類すると、店名とジャンルがカード学習ルールDBへ保存されます。次回同じ正規化店名のカードを開くとおすすめが`★ジャンル`として先頭に出ます。
+カード未処理を手動分類するとカード学習ルールDBへ保存され、次回同じ正規化店名で`★ジャンル`が先頭表示されます。
 
-## 同じ店をまとめる
+## 同じ店まとめ処理
 
-同じカード＋同じ正規化店名が複数未処理にある場合、`同じ店 N件をまとめる`ボタンが表示されます。押してジャンルを1つ選ぶと対象をまとめて処理します。
+同じカード＋同じ正規化店名が複数未処理なら`同じ店 N件をまとめる`が表示されます。保存成功分だけキューから消え、重複候補・保存失敗は未処理に残ります。
 
 ## 自動登録
 
-次をすべて満たしたときだけONにできます。
-
 ```text
-同じ店を同じジャンルに3回以上手動分類
-一致率100%
-ユーザーが自動登録ONを押す
+同じジャンルへ3回以上手動分類
+AND 一致率100%
+AND 本人が自動登録ON
 ```
 
-管理画面:
+管理コマンド:
 
 ```text
 カード自動登録
 ```
 
-OFFにも戻せます。
+自動登録結果は学習回数を増やしません。家計簿に重複候補がある場合は自動処理せず通常確認へ回します。
 
-## 重複確認
+## 重複候補 / 速報・確定候補
 
-家計簿保存前に以下を一致確認します。
+保存時に以下を家計簿DBと比較します。
 
 ```text
 日付 + 金額 + カード + 正規化店名
 ```
 
-一致した場合は自動保存せず、`それでも保存する`または`重複として処理済みにする`を選びます。
+一致したら本人確認:
 
-## 速報/確定の照合
+```text
+それでも保存する
+重複として処理済みにする
+```
 
-Gmail Message IDが異なっても、同日・同額・同カード・同一正規化店名なら同一取引として照合します。未処理にすでにあれば新しい未処理を作らず、家計簿にすでにあれば再キューしません。
+**別Gmail Message IDの同日同額取引を自動削除・自動統合しません。** 正当な複数利用を失わないためです。速報/確定らしい取引も候補として確認し、曖昧な場合は本人判断を優先します。
 
 ## サブスク
 
-カードジャンルでは`固定費`を表示せず、`サブスク`を必ず表示します。サブスク選択後は固定費DBへ登録され、次回同じカード＋店の検出から除外されます。
+カードジャンルでは`固定費`非表示、`サブスク`必須表示。サブスク選択後は固定費DBへ登録され、次回同じカード＋同じ店をカード検出から除外します。
 
 ---
 
 # 9. 2026年9月バックフィル
 
-Apps Scriptで一度だけ:
+GASで:
 
 ```text
 backfillSeptember2026
 ```
 
-既存の未処理・家計簿・固定費ルールとの照合がRender側で働くため、Phase 1導入後の再取り込みでも重複を抑止しやすくなっています。ただし実データに同日同額の正当な複数利用がある場合は重複確認画面で判断してください。
+を手動実行します。途中まで処理済みなら残りから続行できます。
 
 ---
 
-# 10. LINE Postback制限
+# 10. Postback制限
 
-Postback `data` は300文字以内です。未処理カードでは店名・金額などを埋め込まず、`pending_id`と最小限の選択値だけを送ります。
+LINE Postback `data`は300文字以内。未処理カードでは店名・金額等を埋め込まず`pending_id`と最小限の値だけ送ります。
 
 ---
 
-# 11. Phase 1導入後の確認
+# 11. 導入確認
 
-`PHASE1_TEST.md`を上から実施してください。最低限:
+`PHASE1_TEST.md`を上から実行してください。
+
+最低限:
 
 ```text
-1. Render最新デプロイ成功
-2. カード学習ルールDB作成・Integration接続
-3. NOTION_CARD_RULES_DATABASE_ID設定
-4. gas/FinanceReports.gsをGASへコピー
-5. sendMonthEndCardCheckトリガー追加
-6. カード未処理で通常保存
-7. おすすめ表示
-8. 同じ店まとめ処理
-9. 重複確認
-10. 自動登録ON/OFF
+Render最新デプロイ
+カード学習ルールDB作成
+Integration接続
+NOTION_CARD_RULES_DATABASE_ID設定
+最新版FinanceReports.gsをGASへコピー
+sendMonthEndCardCheckトリガー追加
+通常分類→学習
+おすすめ表示
+同じ店まとめ処理
+重複確認
+自動登録ON/OFF
 ```
 
 ---
 
 # 12. トラブル時
 
-最短確認:
+1. Render最新デプロイ成功を確認。
+2. Render Logsの最初のTracebackを確認。
+3. `NOTION_CARD_RULES_DATABASE_ID`を確認。
+4. カード学習ルールDBの7プロパティ名・型を確認。
+5. Integrationが家計簿・固定費・カード未処理・カード学習ルールDBに接続されているか確認。
+6. 最新`FinanceReports.gs`をGASへコピーしたか確認。
+7. `SCHEDULER_SECRET`がGAS/Renderで一致しているか確認。
 
-1. Render最新デプロイが成功しているか
-2. Render Logsの最初のTraceback行
-3. `NOTION_CARD_RULES_DATABASE_ID`が設定されているか
-4. カード学習ルールDBの7プロパティ名・型が完全一致しているか
-5. Integrationが家計簿・固定費・カード未処理・カード学習ルールDBすべてに接続されているか
-6. GASへ最新版`FinanceReports.gs`をコピーしたか
-7. `SCHEDULER_SECRET`がRenderとGASで一致しているか
-
-詳細は`MAINTENANCE.md`を参照してください。
+詳細は`MAINTENANCE.md`。
 
 ---
 
 # 13. セキュリティ
 
-次の秘密値をGitHub、README、Issue、チャットへ貼らないでください。
+秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
