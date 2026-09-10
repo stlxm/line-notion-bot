@@ -22,6 +22,7 @@ def _postback_button(label, data, style="secondary"):
 
 def _section(title, description, buttons, color):
     contents = [
+        {"type": "separator", "margin": "lg"},
         {"type": "text", "text": title, "weight": "bold", "size": "md", "color": color, "margin": "lg", "wrap": True},
         {"type": "text", "text": description, "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
     ]
@@ -30,7 +31,12 @@ def _section(title, description, buttons, color):
 
 
 def create_main_menu_flex():
-    """主要機能を1枚・1列で見やすく表示します。"""
+    """主要機能を1枚・1列で見やすく表示します。
+
+    色は機能の優先順位を表すためには使わず、セクション見出しだけに使用します。
+    メニュー内の操作ボタンはすべて secondary に統一し、先頭数件だけが緑になる
+    不自然な見た目を避けます。
+    """
     body = [
         {
             "type": "text",
@@ -45,8 +51,8 @@ def create_main_menu_flex():
         "📊 家計簿・予算",
         "記録、今月の状況、予算、定期レポート",
         [
-            _message_button("今月のダッシュボード", "今月", "primary"),
-            _postback_button("支出を入力する", "action=quick_input_kakeibo", "primary"),
+            _message_button("今月のダッシュボード", "今月"),
+            _postback_button("支出を入力する", "action=quick_input_kakeibo"),
             _message_button("予算一覧を見る", "予算一覧"),
             _message_button("予算アラートを見る", "予算アラート"),
             _message_button("週次レポートを見る", "週次レポート"),
@@ -62,8 +68,8 @@ def create_main_menu_flex():
         "📝 メモ",
         "追加、一覧、確認付き削除",
         [
-            _postback_button("メモを追加する", "action=quick_input_memo", "primary"),
-            _message_button("メモ一覧を見る", "メモ一覧", "primary"),
+            _postback_button("メモを追加する", "action=quick_input_memo"),
+            _message_button("メモ一覧を見る", "メモ一覧"),
             _message_button("メモを削除する", "メモ削除"),
         ],
         "#0288D1",
@@ -73,7 +79,7 @@ def create_main_menu_flex():
         "🤖 AI検索・改善",
         "明示した質問だけGeminiを使用。変な回答は改善ログへ残せます",
         [
-            _message_button("AI検索の使い方", "AI", "primary"),
+            _message_button("AI検索の使い方", "AI"),
             _message_button("直前のAI回答を改善", "AI改善"),
         ],
         "#F57C00",
