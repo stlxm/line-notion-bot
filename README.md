@@ -4,9 +4,15 @@ LINE を入口に、家計簿・予算・カード利用通知・カード未処
 
 現在は LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。Gemini は `AI 質問内容` と明示した場合だけ起動し、通常コマンドや未登録メッセージでは消費しません。
 
-> 初期構築・環境変数・Notion DB の作成方法は [SETUP.md](./SETUP.md) を参照してください。
->
-> GAS の詳細は [gas/README.md](./gas/README.md) を参照してください。
+## ドキュメント
+
+- [SETUP.md](./SETUP.md): 初期構築、環境変数、Notion DB、GAS、Render設定
+- [MAINTENANCE.md](./MAINTENANCE.md): AIなしでも行える日常保守、障害切り分け、復旧手順
+- [DEVELOPMENT.md](./DEVELOPMENT.md): 長期開発ロードマップ、完了状況、次回の再開位置
+- [UI_DESIGN.md](./UI_DESIGN.md): LINEメニュー、ボタン色、画面構成の設計ルール
+- [gas/README.md](./gas/README.md): GAS固有の設定とカード通知
+
+機能変更時は README.md / SETUP.md / DEVELOPMENT.md を同時更新し、UI変更時は UI_DESIGN.md も更新します。
 
 ---
 
@@ -259,6 +265,8 @@ Flex Message の色はボタンの順番ではなく操作の意味で決めま�
 
 通常のメニューや長い選択肢は1列・全幅を基本にしますが、カードのジャンル選択だけはラベルが短いため2列表示にします。カード未処理画面では、ジャンル2列に加えて `店名を変更する` ボタンを表示します。
 
+今後の機能追加でメニューを巨大化させないため、詳細設計は [UI_DESIGN.md](./UI_DESIGN.md) に固定しています。
+
 ---
 
 ## 8. 定期実行API
@@ -335,6 +343,9 @@ line-notion-bot/
 ├── ai_feedback.py
 ├── README.md
 ├── SETUP.md
+├── DEVELOPMENT.md
+├── MAINTENANCE.md
+├── UI_DESIGN.md
 └── gas/
     ├── Code.gs
     ├── DailyMemo.gs
@@ -342,4 +353,10 @@ line-notion-bot/
     └── README.md
 ```
 
-このREADMEは機能変更と同時に更新する方針です。
+---
+
+## 12. 長期開発方針
+
+追加予定の48機能は [DEVELOPMENT.md](./DEVELOPMENT.md) で7フェーズに分割して管理します。未実装機能をREADME上で利用可能扱いにせず、完成したものだけここへ移します。
+
+障害時や自分で修正したい場合は [MAINTENANCE.md](./MAINTENANCE.md) を最初に確認してください。
