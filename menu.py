@@ -31,20 +31,12 @@ def _section(title, description, buttons, color):
 
 
 def create_main_menu_flex():
-    """主要機能を1枚・1列で表示します。
-
-    通常の前向きな操作は primary（緑）、キャンセル・削除など
-    ネガティブ/低頻度な操作だけ secondary にします。
-    """
-    body = [
-        {
-            "type": "text",
-            "text": "使いたい機能を選んでください。AIは「AI 質問内容」と送ったときだけ呼び出します。",
-            "size": "sm",
-            "color": "#666666",
-            "wrap": True,
-        },
-    ]
+    """現在使える機能を大分類で見やすくまとめる。"""
+    body = [{
+        "type": "text",
+        "text": "使いたい機能を選んでください。AIは「AI 質問内容」と送ったときだけ呼び出します。",
+        "size": "sm", "color": "#666666", "wrap": True,
+    }]
 
     body += _section(
         "📊 家計簿・予算",
@@ -52,7 +44,6 @@ def create_main_menu_flex():
         [
             _message_button("今月のダッシュボード", "今月"),
             _postback_button("支出を入力する", "action=quick_input_kakeibo"),
-            _message_button("カード未処理を確認", "カード未処理"),
             _message_button("予算一覧を見る", "予算一覧"),
             _message_button("予算アラートを見る", "予算アラート"),
             _message_button("週次レポートを見る", "週次レポート"),
@@ -60,6 +51,16 @@ def create_main_menu_flex():
             _message_button("固定費一覧を見る", "固定費一覧"),
             _message_button("固定費を一括登録", "固定費"),
             _message_button("固定費を追加する", "固定費追加"),
+        ],
+        "#1DB446",
+    )
+
+    body += _section(
+        "💳 カード",
+        "未処理、同じ店のまとめ処理、学習・自動登録",
+        [
+            _message_button("カード未処理を確認", "カード未処理"),
+            _message_button("自動分類ルールを見る", "カード自動登録"),
         ],
         "#1DB446",
     )
@@ -97,16 +98,11 @@ def create_main_menu_flex():
     )
 
     flex_json = {
-        "type": "bubble",
-        "size": "mega",
-        "header": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {"type": "text", "text": "🏠 LINE Notion Bot", "weight": "bold", "size": "xl", "wrap": True},
-                {"type": "text", "text": "機能一覧", "size": "sm", "color": "#888888", "margin": "xs"},
-            ],
-        },
+        "type": "bubble", "size": "mega",
+        "header": {"type": "box", "layout": "vertical", "contents": [
+            {"type": "text", "text": "🏠 LINE Notion Bot", "weight": "bold", "size": "xl", "wrap": True},
+            {"type": "text", "text": "機能一覧", "size": "sm", "color": "#888888", "margin": "xs"},
+        ]},
         "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": body},
     }
     return FlexMessage(
