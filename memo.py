@@ -105,12 +105,7 @@ def create_memo_delete_flex():
         return None
 
     contents = [
-        {
-            "type": "text",
-            "text": "🗑️ メモを削除",
-            "weight": "bold",
-            "size": "lg"
-        },
+        {"type": "text", "text": "🗑️ メモを削除", "weight": "bold", "size": "lg"},
         {
             "type": "text",
             "text": "削除したいメモを選んでください。次の画面で内容を確認してから削除します。",
@@ -128,21 +123,11 @@ def create_memo_delete_flex():
         date_text = m.get("date", "")[:10]
 
         item_contents = [
-            {
-                "type": "text",
-                "text": f"{index}. {preview}",
-                "size": "sm",
-                "wrap": True,
-                "weight": "bold"
-            }
+            {"type": "text", "text": f"{index}. {preview}", "size": "sm", "wrap": True, "weight": "bold"}
         ]
         if date_text:
             item_contents.append({
-                "type": "text",
-                "text": date_text,
-                "size": "xxs",
-                "color": "#999999",
-                "margin": "xs"
+                "type": "text", "text": date_text, "size": "xxs", "color": "#999999", "margin": "xs"
             })
 
         contents.append({
@@ -171,11 +156,7 @@ def create_memo_delete_flex():
 
     flex_json = {
         "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": contents
-        },
+        "body": {"type": "box", "layout": "vertical", "contents": contents},
         "footer": {
             "type": "box",
             "layout": "vertical",
@@ -220,12 +201,7 @@ def create_memo_delete_confirm_flex(page_id, title):
             "type": "box",
             "layout": "vertical",
             "contents": [
-                {
-                    "type": "text",
-                    "text": "このメモを削除しますか？",
-                    "weight": "bold",
-                    "size": "sm"
-                },
+                {"type": "text", "text": "このメモを削除しますか？", "weight": "bold", "size": "sm"},
                 {
                     "type": "box",
                     "layout": "vertical",
@@ -234,12 +210,7 @@ def create_memo_delete_confirm_flex(page_id, title):
                     "backgroundColor": "#F7F7F7",
                     "cornerRadius": "md",
                     "contents": [
-                        {
-                            "type": "text",
-                            "text": display_title,
-                            "size": "sm",
-                            "wrap": True
-                        }
+                        {"type": "text", "text": display_title, "size": "sm", "wrap": True}
                     ]
                 },
                 {
@@ -259,8 +230,7 @@ def create_memo_delete_confirm_flex(page_id, title):
             "contents": [
                 {
                     "type": "button",
-                    "style": "primary",
-                    "color": "#D32F2F",
+                    "style": "secondary",
                     "height": "sm",
                     "action": {
                         "type": "postback",
