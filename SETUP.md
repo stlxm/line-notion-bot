@@ -20,6 +20,7 @@ LINE
 Render / Flask
 ├─ 家計簿・予算・メモ
 ├─ カード未処理キュー
+├─ 固定費 / サブスク判定
 ├─ Notion API
 └─ Gemini AI
 
@@ -31,16 +32,14 @@ Google Apps Script
 ↓
 Render /api/card-pending
 ↓
-Notion カード未処理DB
-↓
-LINEへカード利用通知
+固定費DB照合
+├─ 一致あり → 検出除外・通知しない
+└─ 一致なし → カード未処理DB → LINE通知
 ```
-
-カード未処理はNotionへ保存されるため、途中で処理をやめても残りから再開できます。
 
 ---
 
-# 2. 必要なサービス
+# 2. 必要サービス
 
 - GitHub
 - Render
@@ -57,16 +56,14 @@ LINEへカード利用通知
 1. NotionでIntegrationを作成する。
 2. Internal Integration Secretを取得する。
 3. Botが使うすべてのDBへIntegrationを接続する。
-4. 書き込みが必要なDBは更新権限も許可する。
+4. 書き込みが必要なDBでは更新権限も許可する。
 5. Database IDをRender環境変数へ設定する。
-
-DBを作り直すとDatabase IDが変わるため、Renderも更新してください。
 
 ---
 
 # 4. Notion DB仕様
 
-## 家計簿DB
+## 4.1 家計簿DB
 
 | 名前 | 型 |
 |---|---|
@@ -77,13 +74,9 @@ DBを作り直すとDatabase IDが変わるため、Renderも更新してくだ�
 | `カード・支払方法` | Select |
 | `月別管理` | Relation |
 
-環境変数:
+ジャンルには `サブスク` を用意しておくことを推奨します。UI側でもサブスクを必ず表示します。
 
-```text
-NOTION_KAKEIBO_DATABASE_ID
-```
-
-## 月別管理DB
+## 4.2 月別管理DB
 
 | 名前 | 型 |
 |---|---|
@@ -91,11 +84,7 @@ NOTION_KAKEIBO_DATABASE_ID
 | `全体予算` | Number |
 | `食費予算` など | Number |
 
-```text
-NOTION_MONTHLY_DATABASE_ID
-```
-
-## 固定費マスタDB
+## 4.3 固定費DB
 
 | 名前 | 型 |
 |---|---|
@@ -105,32 +94,40 @@ NOTION_MONTHLY_DATABASE_ID
 | `カード・支払方法` | Select |
 | `有効` | Checkbox |
 
+環境変数:
+
 ```text
 NOTION_FIXED_DATABASE_ID
 ```
 
-## メモDB
+カード未処理で `サブスク` を選ぶと、このDBへ保存されます。
+
+同じ `カード・支払方法` と同じ正規化店名が既に有効レコードとして存在する場合は、新規ページを重複作成せず既存レコードを更新します。
+
+`有効=true` の一致レコードは、次回以降のカード検出除外ルールとしても使います。
+
+除外解除:
+
+```text
+固定費DBで該当レコードの「有効」をOFF
+```
+
+すると次回以降は再び通常のカード検出対象になります。
+
+## 4.4 メモDB
 
 | 名前 | 型 |
 |---|---|
 | `メモ` | Title |
 | `日付` | Date |
 
-```text
-NOTION_MEMO_DATABASE_ID
-```
-
-## URL保存DB
+## 4.5 URL保存DB
 
 | 名前 | 型 |
 |---|---|
 | `URL` | Title |
 
-```text
-NOTION_URL_DATABASE_ID
-```
-
-## AI改善ログDB
+## 4.6 AI改善ログDB
 
 | 名前 | 型 |
 |---|---|
@@ -139,11 +136,7 @@ NOTION_URL_DATABASE_ID
 | `期待する回答` | Rich text |
 | `登録日時` | Date |
 
-```text
-NOTION_AI_FEEDBACK_DATABASE_ID
-```
-
-## カード未処理DB
+## 4.7 カード未処理DB
 
 | 名前 | 型 |
 |---|---|
@@ -155,79 +148,22 @@ NOTION_AI_FEEDBACK_DATABASE_ID
 | `通知済み` | Checkbox |
 | `登録日時` | Date |
 
+環境変数:
+
 ```text
 NOTION_CARD_PENDING_DATABASE_ID
 ```
 
-タイトル列はコード側で自動検出できますが、管理上は `GmailMessageID` を推奨します。
-
-家計簿への保存成功、または `登録しない` を選んだ後はページをアーカイブします。
-
-## その他AI検索対象DB
-
-```text
-NOTION_DATABASE_IDS=id1,id2,id3
-```
-
-専用環境変数があるDBを重複して入れる必要はありません。
+タイトル列はコードで自動検出できますが、管理上は `GmailMessageID` を推奨します。
 
 ---
 
-# 5. LINE Developers
-
-Renderへ設定:
-
-```text
-LINE_CHANNEL_SECRET
-LINE_CHANNEL_ACCESS_TOKEN
-```
-
-Webhook URL:
-
-```text
-https://YOUR-RENDER-DOMAIN.onrender.com/callback
-```
-
-WebhookをONにします。
-
-アクセストークンをチャットや公開コードへ貼ったことがある場合は再発行し、RenderとGASの両方を更新してください。
-
----
-
-# 6. Render
-
-推奨:
-
-```text
-Runtime: Python
-Build Command: pip install -r requirements.txt
-Start Command: gunicorn app:app
-```
-
-ヘルスチェック:
-
-```text
-GET /
-→ Bot is running!
-```
-
-GitHub `main` へのpushで自動デプロイする設定を推奨します。
-
----
-
-# 7. Render環境変数
-
-LINE:
+# 5. Render環境変数
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
 LINE_CHANNEL_SECRET
 ADMIN_USER_ID
-```
-
-Notion:
-
-```text
 NOTION_API_KEY
 NOTION_PAGE_URL
 NOTION_KAKEIBO_DATABASE_ID
@@ -238,36 +174,22 @@ NOTION_URL_DATABASE_ID
 NOTION_AI_FEEDBACK_DATABASE_ID
 NOTION_CARD_PENDING_DATABASE_ID
 NOTION_DATABASE_IDS
-```
-
-Gemini:
-
-```text
 GEMINI_API_KEY
 GEMINI_MODEL
-```
-
-Scheduler:
-
-```text
 SCHEDULER_SECRET
 ```
 
-`SCHEDULER_SECRET` は長いランダム値にし、GASと完全一致させます。
-
 ---
 
-# 8. Google Apps Script
+# 6. Google Apps Script
 
-同じApps ScriptプロジェクトへGitHubの最新版をコピーします。
+GitHubの最新版を同じApps Scriptプロジェクトへコピーします。
 
 ```text
 gas/Code.gs
 gas/FinanceReports.gs
 gas/DailyMemo.gs
 ```
-
-GitHubの `.gs` は通常、自動同期されません。GitHubで更新したらApps Script側にもコピーしてください。
 
 Script Properties:
 
@@ -278,62 +200,23 @@ RENDER_BASE_URL
 SCHEDULER_SECRET
 ```
 
-`RENDER_BASE_URL` は末尾 `/` なしを推奨します。
+今回のサブスク除外機能はRender側で判定するため、GASへ新しいScript Propertyを追加する必要はありません。
 
 ---
 
-# 9. GASトリガー
+# 7. GASトリガー
 
 ```text
-checkCardEmails
-→ 1時間ごと
-
-sendDailyCardPendingReminder
-→ 毎日 20〜21時ごろ
-
-sendDailyMemoReminder
-→ 毎日 朝8時ごろ
-
-sendDailyBudgetAlert
-→ 毎日 20時ごろ
-
-sendWeeklyFinanceReport
-→ 毎週日曜日 20時ごろ
+checkCardEmails              → 1時間ごと
+sendDailyCardPendingReminder → 毎日 20〜21時ごろ
+sendDailyMemoReminder        → 毎日 朝8時ごろ
+sendDailyBudgetAlert         → 毎日 20時ごろ
+sendWeeklyFinanceReport      → 毎週日曜日 20時ごろ
 ```
-
-カード通常監視は1時間ごとに動かし、コード内部では直近2時間を検索します。
 
 ---
 
-# 10. 2026年9月カード履歴の一括取り込み
-
-Apps Scriptで次を手動実行します。
-
-```text
-backfillSeptember2026
-```
-
-処理:
-
-```text
-9月前後のGmailを検索
-↓
-本文から実利用日を解析
-↓
-2026-09の利用だけ採用
-↓
-カード未処理DBへ追加
-↓
-個別LINE通知はしない
-↓
-最後に追加件数だけ通知
-```
-
-途中まで処理済みでも、残った未処理だけ後から続けられます。
-
----
-
-# 11. カード未処理操作
+# 8. カード未処理の操作
 
 LINEで:
 
@@ -341,229 +224,148 @@ LINEで:
 カード未処理
 ```
 
-表示:
+表示するジャンルのルール:
 
 ```text
-金額
-利用先
-カード
-利用日
-残り件数
+通常ジャンル → 表示
+サブスク     → 必ず表示
+固定費       → 表示しない
 ```
 
-操作:
+ジャンルは2列表示です。
+
+`サブスク` を選んだ場合:
 
 ```text
-ジャンル → 緑・2列
-店名を変更する → 緑
-登録しない → 色なし
-```
-
-保存成功後は未処理ページをアーカイブし、自動で次の未処理を表示します。
-
-古い処理済み通知をもう一度押しても、`pending_id` が無効なら家計簿へ二重登録しません。
-
----
-
-# 12. LINE Postback 300文字エラー
-
-## 症状
-
-Render Logs:
-
-```text
-ValidationError: 1 validation error for PostbackAction
-data
-ensure this value has at most 300 characters
-```
-
-HTTP:
-
-```text
-POST /callback → 500
-```
-
-## 原因
-
-カード未処理のジャンルボタンへ以下を全部埋め込むと、日本語店名のURLエンコードによって300文字を超える場合があります。
-
-```text
-card
-store
-amount
-date
-cat
-pending_id
-```
-
-## 現在の修正版
-
-未処理カードではPostbackを短くしています。
-
-ジャンル選択:
-
-```text
-action=kakeibo_save
-pending_id=<Notion page id>
-cat=<ジャンル>
-```
-
-店名変更:
-
-```text
-action=card_change_store_start
-pending_id=<Notion page id>
-```
-
-`app.py` が受信後に:
-
-```text
-card_queue.get_item(pending_id)
-```
-
-を呼び、Notionからカード名・店名・金額・日付を復元します。
-
-## エラー発生後の復旧
-
-この500エラーはFlex生成段階で発生するため、未処理DBのページは通常そのまま残っています。
-
-1. GitHubの修正版がRenderへデプロイ済みか確認する。
-2. Render Logsで起動成功を確認する。
-3. LINEで `カード未処理` と送る。
-4. 残っている項目から続きを処理する。
-
-9月バックフィルをやり直す必要はありません。
-
----
-
-# 13. AI検索
-
-```text
-AI 今月の食費を分析して
-```
-
-処理:
-
-```text
-PythonでDB選択
+固定費DBの既存一致を確認
 ↓
-最大2DB取得
+一致あり → 金額・ジャンル・有効状態を更新
+一致なし → 固定費DBへ新規登録
 ↓
-AI改善ログから関連例を最大3件選択
+今回分を家計簿へ保存
 ↓
-Gemini最終回答1回
+未処理キューからアーカイブ
 ↓
-LINE向けプレーンテキスト
+次の未処理を表示
 ```
 
-AI処理タイムアウトは60秒です。
-
-Markdownは生成指示と送信前サニタイズの二重対策で除去します。
+固定費DBへの登録確認に失敗した場合は、安全のため家計簿保存も進めず未処理を残します。これにより除外ルールだけ中途半端に作られることを防ぎます。
 
 ---
 
-# 14. AI改善
+# 9. 今後のカード検出除外
+
+GASがカードメールを解析した後、Renderの `/api/card-pending` で固定費DBを照合します。
+
+一致条件:
 
 ```text
-AI改善
+カード名が一致
+AND
+正規化店名が一致
+AND
+固定費DBの有効=true
 ```
 
-直前の質問、AI回答、本当はどう答えてほしかったか、登録日時をNotionへ保存します。
+一致した場合:
+
+```text
+カード未処理DBへ入れない
+LINE通知しない
+GASでは処理済み扱いにする
+```
+
+金額は除外判定条件に使いません。サブスク料金が値上げしても、同じカード・同じ店なら除外できます。
+
+既に未処理DBへ入っている過去分には遡って自動適用しません。
 
 ---
 
-# 15. UIルール
+# 10. 2026年9月バックフィル
 
-詳細は `UI_DESIGN.md` を参照してください。
-
-重要:
+Apps Scriptで:
 
 ```text
-通常操作 → primary / 緑
-キャンセル・戻る・登録しない → secondary
-カードジャンル → 2列
-長い選択肢・メニュー → 原則1列
-Postback data → 必ず300文字以内
-DBで再取得可能な値 → Postbackへ埋め込まない
+backfillSeptember2026
+```
+
+を手動実行します。
+
+既に固定費DBの有効レコードに一致するカード利用は、Render側で未処理キューへの追加対象から外れます。
+
+---
+
+# 11. LINE Postback 300文字対策
+
+未処理カードのボタンには長い店名を埋め込まず、`pending_id` を中心に短いPostbackを使用します。
+
+```text
+ジャンル選択 → action + pending_id + cat
+店名変更     → action + pending_id
+登録しない   → action + pending_id
+```
+
+Render側でNotionから実データを再取得します。
+
+---
+
+# 12. 動作確認
+
+Render再デプロイ後、サブスク候補の未処理カードで確認します。
+
+```text
+1. カード未処理 を送る
+2. ジャンル一覧に「サブスク」がある
+3. 「固定費」は出ていない
+4. サブスクを押す
+5. 固定費DBにレコードが作成または更新される
+6. 今回分が家計簿DBへ保存される
+7. 未処理から消えて次へ進む
+```
+
+次回同じカード + 同じ店のメールが来た場合:
+
+```text
+未処理DBへ入らない
+LINE通知されない
+```
+
+除外解除テスト:
+
+```text
+固定費DBの有効をOFF
+↓
+次回は通常カード検出へ戻る
 ```
 
 ---
 
-# 16. 動作確認
+# 13. トラブル時
 
-Render再デプロイ後:
+固定費/サブスク関連でおかしい場合は次を確認します。
 
-```text
-メニュー
-カード未処理
-今月
-予算一覧
-予算アラート
-週次レポート
-メモ一覧
-AI
-```
-
-カード未処理では:
-
-```text
-店名変更ボタンがある
-ジャンルが2列
-長い店名でも画面が表示される
-ジャンル保存できる
-保存後に次へ進む
-登録しないでも次へ進む
-途中でやめても後から再開できる
-```
-
-GASでは `checkCardEmails` を手動実行し、正常なら:
-
-```text
-[解析成功]
-[Render] /api/card-pending: 200
-LINEレスポンス: 200
-```
-
-を確認します。
-
----
-
-# 17. トラブル時の最短確認
-
-1. Render最新デプロイ成功?
-2. Render Logsに例外?
-3. GAS実行履歴にエラー?
-4. Notion DBの列名・型は正しい?
-5. Integrationは対象DBに接続済み?
-6. `SCHEDULER_SECRET` はGAS/Renderで同一?
-7. GASへGitHub最新版をコピー済み?
-8. FlexエラーならPostback dataが300文字を超えていない?
+1. `NOTION_FIXED_DATABASE_ID` が正しいか
+2. 固定費DBのIntegration接続があるか
+3. `内容・店名 / 金額 / ジャンル / カード・支払方法 / 有効` の型が正しいか
+4. Render Logsに `固定費マスタ` または `固定費除外ルール` エラーがないか
+5. 除外したいレコードが `有効=true` か
+6. カード名が家計簿側と固定費DB側で同じ表記か
 
 詳細は `MAINTENANCE.md` を参照してください。
 
 ---
 
-# 18. 長期開発
+# 14. 開発管理
 
-`DEVELOPMENT.md` を唯一の進捗基準にします。
+長期開発の現在地は `DEVELOPMENT.md` を唯一の基準にします。
 
-現在はPhase 1「カード自動化」が進行中です。`card_rules.py` の基盤は実装済みですが、まだLINEカード処理には接続していません。
-
-機能追加ごとに:
-
-```text
-README.md
-SETUP.md
-DEVELOPMENT.md
-```
-
-を更新し、UI変更なら `UI_DESIGN.md` も更新します。
+機能追加ごとに README.md / SETUP.md / DEVELOPMENT.md を更新し、UI変更時は UI_DESIGN.md も更新します。
 
 ---
 
-# 19. セキュリティ
+# 15. セキュリティ
 
-GitHub、README、Issue、チャットへ次を貼らないでください。
+秘密値はGitHub、README、Issue、チャットへ貼らないでください。
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
@@ -572,5 +374,3 @@ NOTION_API_KEY
 GEMINI_API_KEY
 SCHEDULER_SECRET
 ```
-
-漏えいしたアクセストークンは再発行し、RenderとGASの両方を更新します。
