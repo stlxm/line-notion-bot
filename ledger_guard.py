@@ -20,12 +20,15 @@ def _title_text(prop):
     return "".join(x.get("plain_text", "") for x in prop.get("title", []))
 
 
-def find_duplicate(card_name, store_name, amount, date_str):
-    """家計簿DBから同日・同額・同カード・同一正規化店名の支出を探す。
+def find_duplicate(card_name, store_name, amount, date_str, candidate_check=False):
+    """家計簿DBから重複候補を探す。
 
-    カード会社の別メール（速報/確定など）が別Gmail Message IDで届いても、
-    同一取引と判断できるものを二重登録しないための最終ガード。
+    デフォルトでは自動抑止に使わない。candidate_check=True を明示した
+    ユーザー確認フローだけで候補を返す。これにより、同日・同額・同店を
+    本当に複数回利用したケースを自動で消さない。
     """
+    if not candidate_check:
+        return None
     if not NOTION_API_KEY or not NOTION_KAKEIBO_DATABASE_ID:
         return None
 
@@ -47,9 +50,7 @@ def find_duplicate(card_name, store_name, amount, date_str):
     try:
         res = requests.post(
             f"https://api.notion.com/v1/databases/{NOTION_KAKEIBO_DATABASE_ID}/query",
-            headers=_headers(),
-            json=payload,
-            timeout=10,
+            headers=_headers(), json=payload, timeout=10,
         )
         if res.status_code != 200:
             print(f"家計簿重複検索エラー ({res.status_code}): {res.text}")
