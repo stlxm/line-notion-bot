@@ -197,6 +197,27 @@ LINE
 
 60秒は Gemini / Notion の一時的な遅延やリトライに備える安全弁として残しています。
 
+### LINE向けプレーンテキスト出力
+
+GeminiのMarkdown記法はLINE上では装飾されず、そのまま `**` や `##` と表示されて読みにくいため、AI回答はプレーンテキストへ正規化します。
+
+対策は2段階です。
+
+1. GeminiへのプロンプトでMarkdownを使わないよう明示
+2. `ai_engine.py` の `sanitize_for_line()` で返答後にもMarkdown記号を除去
+
+除去・変換対象:
+
+- `#` / `##` / `###` などの見出し記号
+- `**` / `__` の太字・斜体記号
+- `` ` `` / ``` のコード記号
+- `>` の引用記号
+- `~~` の取り消し線記号
+- Markdownリンク記法
+- `-` / `*` / `+` の箇条書き記号は `・` に統一
+
+見出しが必要な場合は `【見出し】`、箇条書きは `・` を使う方針です。
+
 ---
 
 ## 4. AI回答改善ループ
@@ -347,7 +368,7 @@ line-notion-bot/
 ├── menu.py                # メインメニュー
 ├── ui.py                  # 読みやすいFlex UI
 ├── notion_helper.py       # Notionアクセス・DBルーター
-├── ai_engine.py           # Notion + 改善例 + Gemini最終回答
+├── ai_engine.py           # Notion + 改善例 + Gemini最終回答 + LINE向け整形
 ├── ai_feedback.py         # AI改善ログ保存・類似例検索
 ├── prompt.txt
 ├── requirements.txt
