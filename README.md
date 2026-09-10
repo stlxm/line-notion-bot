@@ -1,8 +1,8 @@
 # LINE Notion Bot
 
-LINE を入口に、家計簿・予算・カード利用通知・カード未処理キュー・メモ・Notion・Gemini AI・AI回答改善をまとめて扱う個人向けBotです。
+LINE を入口に、家計簿・予算・カード利用通知・カード未処理キュー・固定費/サブスク・メモ・Notion・Gemini AI をまとめて扱う個人向けBotです。
 
-現在は LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。Gemini は `AI 質問内容` と明示した場合だけ起動し、通常コマンドや未登録メッセージでは消費しません。
+現在は LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。Gemini は `AI 質問内容` と明示した場合だけ起動します。
 
 ## ドキュメント
 
@@ -64,8 +64,6 @@ AI改善
 
 AI検索は明示的に `AI ` を付けた場合だけGeminiを使います。回答が期待と違った場合は `AI改善` で質問・実回答・期待回答をNotionへ保存し、似た質問の改善に利用します。
 
-GeminiのMarkdown記号はLINE送信前に除去します。
-
 ---
 
 ## クレジットカード利用通知と未処理キュー
@@ -100,34 +98,39 @@ LINEへ即時通知
 
 カードのジャンルは2列、通常操作は緑、`登録しない` は控えめな表示です。店名変更も未処理画面から利用できます。
 
+### サブスク登録
+
+カード未処理のジャンルには `サブスク` を表示します。`固定費` はカード未処理のジャンル一覧には表示しません。
+
+`サブスク` を選んだ場合:
+
+```text
+サブスクを選択
+↓
+固定費DBへ登録または更新
+↓
+今回分を家計簿DBへ保存
+↓
+未処理キューからアーカイブ
+↓
+次回以降、同じカード + 同じ正規化店名はカード検出から除外
+```
+
+固定費DBに同じカード・同じ店が既にある場合は重複作成せず、既存レコードの金額・ジャンル・有効状態を更新します。
+
+除外条件は `カード名 + 正規化した店名` です。金額が同じだけでは除外しません。
+
+除外を解除したい場合はNotion固定費DBで該当レコードの `有効` をOFFにしてください。次回以降、通常のカード検出対象へ戻ります。
+
+既にカード未処理DBへ入っている過去分は自動削除しません。必要ならそのまま処理してください。
+
 ### LINE Postback 300文字対策
 
-2026-09-11に、長い日本語店名を含むカードで次のエラーが発生しました。
-
-```text
-ValidationError: PostbackAction data
-ensure this value has at most 300 characters
-```
-
-原因は、ジャンルボタンのPostbackにカード名・店名・金額・日付・ジャンル・pending_idをすべて埋め込んでいたことです。
-
-現在は、未処理カードのボタンでは次のように最小限の値だけ送ります。
-
-```text
-ジャンル選択:
-action + pending_id + category
-
-店名変更:
-action + pending_id
-```
-
-押された後に `app.py` が `card_queue.get_item(pending_id)` でNotionからカード名・店名・金額・日付を再取得します。これにより長い店名でもPostbackの300文字上限を超えにくくなっています。
-
-この障害で未処理DBのデータ自体は壊れません。Render再デプロイ後に `カード未処理` から残りをそのまま続けられます。
+未処理カードのボタンでは、長い店名をPostbackへ埋め込まず `pending_id` と必要最小限の値だけ送信します。押された後にRenderがNotion未処理DBから実データを再取得します。
 
 ### 二重登録防止
 
-新方式の通知には `pending_id` が含まれます。保存済み・スキップ済みの古い通知を押した場合は、家計簿へ再登録せず次の未処理へ進みます。
+保存済み・スキップ済みの古い通知を押した場合は、`pending_id` を確認して家計簿へ再登録しません。
 
 ### 日次未処理リマインダー
 
@@ -135,7 +138,7 @@ action + pending_id
 
 ---
 
-## 2026年9月のカード履歴バックフィル
+## 2026年9月カード履歴バックフィル
 
 GASで次を手動実行します。
 
@@ -144,8 +147,6 @@ backfillSeptember2026
 ```
 
 2026年9月前後のメールを広めに検索し、本文から解析した利用日が `2026-09` のものだけを未処理キューへ追加します。過去分は1件ずつLINE通知せず、最後に追加件数だけ通知します。
-
-途中まで処理済みでも、残った未処理だけ続けられます。
 
 ---
 
@@ -163,7 +164,19 @@ AI改善ログ
 カード未処理
 ```
 
-カード未処理DBの推奨プロパティ:
+### 固定費DB
+
+| 名前 | 型 |
+|---|---|
+| `内容・店名` | Title |
+| `金額` | Number |
+| `ジャンル` | Select |
+| `カード・支払方法` | Select |
+| `有効` | Checkbox |
+
+サブスクをカード未処理から登録すると、このDBへ `ジャンル=サブスク`、`有効=true` で保存されます。
+
+### カード未処理DB
 
 | 名前 | 型 |
 |---|---|
@@ -180,8 +193,6 @@ AI改善ログ
 ```text
 NOTION_CARD_PENDING_DATABASE_ID
 ```
-
-タイトル列はコードが自動検出できますが、管理上は `GmailMessageID` を推奨します。
 
 ---
 
@@ -206,38 +217,23 @@ GEMINI_MODEL
 SCHEDULER_SECRET
 ```
 
-秘密値はGitHubへ直接保存しません。
-
 ---
 
 ## GAS推奨トリガー
 
 ```text
-checkCardEmails
-→ 1時間ごと
-
-sendDailyMemoReminder
-→ 毎日 朝8時ごろ
-
-sendDailyBudgetAlert
-→ 毎日 20時ごろ
-
-sendDailyCardPendingReminder
-→ 毎日 20〜21時ごろ
-
-sendWeeklyFinanceReport
-→ 毎週日曜日 20時ごろ
+checkCardEmails              → 1時間ごと
+sendDailyMemoReminder        → 毎日 朝8時ごろ
+sendDailyBudgetAlert         → 毎日 20時ごろ
+sendDailyCardPendingReminder → 毎日 20〜21時ごろ
+sendWeeklyFinanceReport      → 毎週日曜日 20時ごろ
 ```
 
 ---
 
 ## 開発中の大規模拡張
 
-今後追加する48機能は `DEVELOPMENT.md` で7フェーズに分けて管理しています。現在はPhase 1「カード入力の自動化」を進行中です。
-
-基盤として `card_rules.py` を追加済みですが、カード学習機能はまだLINEフローへ接続していないため現時点では利用できません。
-
-次の開発再開位置も `DEVELOPMENT.md` に固定しています。
+今後追加する機能は `DEVELOPMENT.md` でフェーズ管理しています。現在はPhase 1「カード入力の自動化」を進行中です。
 
 ---
 
@@ -253,6 +249,4 @@ sendWeeklyFinanceReport
 4. Notion DB列名・型がSETUP.mdと一致しているか
 5. Notion Integrationが対象DBへ接続されているか
 6. GASとRenderの `SCHEDULER_SECRET` が一致しているか
-7. GASへGitHubの最新版をコピーしたか
-
-LINE UIを変更するときは `UI_DESIGN.md` のPostback 300文字ルールも必ず確認してください。
+7. GASへGitHub最新版をコピーしたか
