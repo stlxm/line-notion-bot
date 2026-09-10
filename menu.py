@@ -33,7 +33,13 @@ def _section(title, description, buttons, color):
 def create_main_menu_flex():
     """主要機能を1枚・1列で見やすく表示します。"""
     body = [
-        {"type": "text", "text": "使いたい機能を選んでください。文字が切れないよう、ボタンは全幅表示です。", "size": "sm", "color": "#666666", "wrap": True},
+        {
+            "type": "text",
+            "text": "使いたい機能を選んでください。AIは「AI 質問内容」と送ったときだけ呼び出します。",
+            "size": "sm",
+            "color": "#666666",
+            "wrap": True,
+        },
     ]
 
     body += _section(
@@ -62,6 +68,15 @@ def create_main_menu_flex():
             _message_button("メモを削除する", "メモ削除"),
         ],
         "#0288D1",
+    )
+
+    body += _section(
+        "🤖 AI検索",
+        "API節約のため、明示的にAIを付けた質問だけGeminiを使います",
+        [
+            _message_button("AI検索の使い方", "AI", "primary"),
+        ],
+        "#F57C00",
     )
 
     body += _section(
