@@ -2,7 +2,7 @@ import json
 from linebot.v3.messaging import FlexMessage, FlexContainer
 
 
-def _message_button(label, text, style="secondary"):
+def _message_button(label, text, style="primary"):
     return {
         "type": "button",
         "style": style,
@@ -11,7 +11,7 @@ def _message_button(label, text, style="secondary"):
     }
 
 
-def _postback_button(label, data, style="secondary"):
+def _postback_button(label, data, style="primary"):
     return {
         "type": "button",
         "style": style,
@@ -31,11 +31,10 @@ def _section(title, description, buttons, color):
 
 
 def create_main_menu_flex():
-    """主要機能を1枚・1列で見やすく表示します。
+    """主要機能を1枚・1列で表示します。
 
-    色は機能の優先順位を表すためには使わず、セクション見出しだけに使用します。
-    メニュー内の操作ボタンはすべて secondary に統一し、先頭数件だけが緑になる
-    不自然な見た目を避けます。
+    通常の前向きな操作は primary（緑）、キャンセル・削除など
+    ネガティブ/低頻度な操作だけ secondary にします。
     """
     body = [
         {
@@ -53,6 +52,7 @@ def create_main_menu_flex():
         [
             _message_button("今月のダッシュボード", "今月"),
             _postback_button("支出を入力する", "action=quick_input_kakeibo"),
+            _message_button("カード未処理を確認", "カード未処理"),
             _message_button("予算一覧を見る", "予算一覧"),
             _message_button("予算アラートを見る", "予算アラート"),
             _message_button("週次レポートを見る", "週次レポート"),
@@ -70,7 +70,7 @@ def create_main_menu_flex():
         [
             _postback_button("メモを追加する", "action=quick_input_memo"),
             _message_button("メモ一覧を見る", "メモ一覧"),
-            _message_button("メモを削除する", "メモ削除"),
+            _message_button("メモを削除する", "メモ削除", "secondary"),
         ],
         "#0288D1",
     )
