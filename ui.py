@@ -7,8 +7,7 @@ from linebot.v3.messaging import FlexMessage, FlexContainer
 def create_choice_flex(title, options, callback_action, extra_params=None, include_cancel=False):
     """長い日本語ラベルが見切れにくい1列・全幅の選択UI。
 
-    選択肢に優先順位がない画面では、すべて secondary に統一します。
-    これにより先頭だけ緑色になる不自然な見た目を避けます。
+    通常の選択肢は primary（緑）、キャンセルだけ secondary にします。
     """
     extra_params = extra_params or {}
     buttons = []
@@ -17,7 +16,7 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
         params = {"action": callback_action, "val": option, **extra_params}
         buttons.append({
             "type": "button",
-            "style": "secondary",
+            "style": "primary",
             "height": "sm",
             "action": {
                 "type": "postback",
@@ -46,7 +45,7 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
             "layout": "vertical",
             "contents": [
                 {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
-                {"type": "text", "text": "選択肢は1列・同じ見た目で表示しています", "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
+                {"type": "text", "text": "選択肢は1列表示です。通常操作は緑、キャンセルのみ控えめに表示します。", "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
             ],
         },
         "body": {
@@ -65,29 +64,36 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
     )
 
 
-def create_card_category_flex(card, store, amount, date_str, categories):
+def create_card_category_flex(card, store, amount, date_str, categories, pending_id=None):
     buttons = []
     for category in categories:
-        data = urlencode({
+        params = {
             "action": "kakeibo_save",
             "card": card,
             "store": store,
             "amount": amount,
             "date": date_str,
             "cat": category,
-        })
+        }
+        if pending_id:
+            params["pending_id"] = pending_id
+        data = urlencode(params)
         buttons.append({
             "type": "button",
-            "style": "secondary",
+            "style": "primary",
             "height": "sm",
             "action": {"type": "postback", "label": category[:20], "data": data},
         })
+
+    skip_data = "action=cancel_registration"
+    if pending_id:
+        skip_data = urlencode({"action": "skip_card_pending", "pending_id": pending_id})
 
     buttons.append({
         "type": "button",
         "style": "secondary",
         "height": "sm",
-        "action": {"type": "postback", "label": "登録しない", "data": "action=cancel_registration"},
+        "action": {"type": "postback", "label": "登録しない", "data": skip_data},
     })
 
     flex_json = {
