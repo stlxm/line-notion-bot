@@ -1,14 +1,14 @@
 # LINE Notion Bot セットアップガイド
 
-このドキュメントは、LINE・Notion・Gemini・Gmail・Google Apps Script・Render を連携して、このBotをゼロから構築し、AIを使わなくても日常保守できる状態にするための手順書です。
+この文書は、LINE・Notion・Gemini・Gmail・Google Apps Script・Render を連携し、このBotをゼロから構築し、AIを使わなくても日常保守できるようにするための手順書です。
 
 関連文書:
 
 - `README.md`: 現在利用できる機能
 - `MAINTENANCE.md`: 障害切り分け、復旧、日常保守
 - `DEVELOPMENT.md`: 長期開発ロードマップ、進捗、次回再開位置
-- `UI_DESIGN.md`: LINE UIの設計ルール
-- `gas/README.md`: GASの詳細
+- `UI_DESIGN.md`: LINE UI・Postback設計ルール
+- `gas/README.md`: GAS詳細
 
 ---
 
@@ -16,27 +16,27 @@
 
 ```text
 LINE
-  ↓
+↓
 Render / Flask
-  ├─ 家計簿・予算・メモ
-  ├─ カード未処理キュー
-  ├─ Notion API
-  └─ Gemini AI
+├─ 家計簿・予算・メモ
+├─ カード未処理キュー
+├─ Notion API
+└─ Gemini AI
 
 カード会社メール
-  ↓
+↓
 Gmail
-  ↓
+↓
 Google Apps Script
-  ↓
+↓
 Render /api/card-pending
-  ↓
+↓
 Notion カード未処理DB
-  ↓
-LINEへカード通知
+↓
+LINEへカード利用通知
 ```
 
-カード未処理はNotionに永続化されるため、途中で処理をやめても問題ありません。保存済み・スキップ済みは未処理DBからアーカイブされ、残りだけ後から続けられます。
+カード未処理はNotionへ保存されるため、途中で処理をやめても残りから再開できます。
 
 ---
 
@@ -57,16 +57,16 @@ LINEへカード通知
 1. NotionでIntegrationを作成する。
 2. Internal Integration Secretを取得する。
 3. Botが使うすべてのDBへIntegrationを接続する。
-4. 書き込みが必要なDBでは更新権限も有効にする。
+4. 書き込みが必要なDBは更新権限も許可する。
 5. Database IDをRender環境変数へ設定する。
 
-Notion DBを複製・作り直した場合、Database IDが変わるのでRenderも更新してください。
+DBを作り直すとDatabase IDが変わるため、Renderも更新してください。
 
 ---
 
 # 4. Notion DB仕様
 
-## 4.1 家計簿DB
+## 家計簿DB
 
 | 名前 | 型 |
 |---|---|
@@ -83,7 +83,7 @@ Notion DBを複製・作り直した場合、Database IDが変わるのでRender
 NOTION_KAKEIBO_DATABASE_ID
 ```
 
-## 4.2 月別管理DB
+## 月別管理DB
 
 | 名前 | 型 |
 |---|---|
@@ -91,13 +91,11 @@ NOTION_KAKEIBO_DATABASE_ID
 | `全体予算` | Number |
 | `食費予算` など | Number |
 
-ジャンル別予算は `ジャンル名 + 予算` の名前にします。
-
 ```text
 NOTION_MONTHLY_DATABASE_ID
 ```
 
-## 4.3 固定費マスタDB
+## 固定費マスタDB
 
 | 名前 | 型 |
 |---|---|
@@ -111,7 +109,7 @@ NOTION_MONTHLY_DATABASE_ID
 NOTION_FIXED_DATABASE_ID
 ```
 
-## 4.4 メモDB
+## メモDB
 
 | 名前 | 型 |
 |---|---|
@@ -122,7 +120,7 @@ NOTION_FIXED_DATABASE_ID
 NOTION_MEMO_DATABASE_ID
 ```
 
-## 4.5 URL保存DB
+## URL保存DB
 
 | 名前 | 型 |
 |---|---|
@@ -132,7 +130,7 @@ NOTION_MEMO_DATABASE_ID
 NOTION_URL_DATABASE_ID
 ```
 
-## 4.6 AI改善ログDB
+## AI改善ログDB
 
 | 名前 | 型 |
 |---|---|
@@ -145,11 +143,7 @@ NOTION_URL_DATABASE_ID
 NOTION_AI_FEEDBACK_DATABASE_ID
 ```
 
-このDBは通常のAI検索対象へ混ぜません。
-
-## 4.7 カード未処理DB
-
-一時キュー専用です。
+## カード未処理DB
 
 | 名前 | 型 |
 |---|---|
@@ -165,48 +159,23 @@ NOTION_AI_FEEDBACK_DATABASE_ID
 NOTION_CARD_PENDING_DATABASE_ID
 ```
 
-タイトル列はコードが自動検出できますが、管理しやすさのため `GmailMessageID` を推奨します。
+タイトル列はコード側で自動検出できますが、管理上は `GmailMessageID` を推奨します。
 
-保存成功または `登録しない` の後は `archived=true` にして通常表示から消します。
+家計簿への保存成功、または `登録しない` を選んだ後はページをアーカイブします。
 
-## 4.8 その他のAI検索対象DB
-
-専用環境変数がない追加DBだけをカンマ区切りで入れます。
+## その他AI検索対象DB
 
 ```text
 NOTION_DATABASE_IDS=id1,id2,id3
 ```
 
-## 4.9 開発中: カード学習ルールDB
-
-Phase 1用の基盤コード `card_rules.py` は追加済みですが、現時点ではまだLINE処理に接続していません。そのためこのDBは**まだ必須ではありません**。`DEVELOPMENT.md` で接続完了になった時点で有効化します。
-
-予定プロパティ:
-
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `店名キー` | Title | 正規化した店名の照合キー |
-| `表示名` | Rich text | ユーザー向け店名 |
-| `ジャンル` | Select | 推奨ジャンル |
-| `学習回数` | Number | この店を分類した総回数 |
-| `一致回数` | Number | 現在ジャンルが連続一致した回数 |
-| `自動登録` | Checkbox | ユーザーが明示的に自動登録を許可したか |
-| `最終更新` | Date | 最終学習日時 |
-
-接続後に使うRender環境変数:
-
-```text
-NOTION_CARD_RULES_DATABASE_ID
-CARD_AUTO_REGISTER_MIN_MATCHES
-```
-
-`CARD_AUTO_REGISTER_MIN_MATCHES` は未設定時3を想定します。自動登録は、この回数以上の一致に加え、ユーザーが `自動登録` をONにした店だけを対象にします。
+専用環境変数があるDBを重複して入れる必要はありません。
 
 ---
 
 # 5. LINE Developers
 
-取得する値:
+Renderへ設定:
 
 ```text
 LINE_CHANNEL_SECRET
@@ -221,13 +190,13 @@ https://YOUR-RENDER-DOMAIN.onrender.com/callback
 
 WebhookをONにします。
 
-Channel Access Tokenをチャットや公開コードへ貼った場合は再発行し、RenderとGASの両方を更新してください。
+アクセストークンをチャットや公開コードへ貼ったことがある場合は再発行し、RenderとGASの両方を更新してください。
 
 ---
 
-# 6. Render Web Service
+# 6. Render
 
-推奨設定:
+推奨:
 
 ```text
 Runtime: Python
@@ -235,20 +204,18 @@ Build Command: pip install -r requirements.txt
 Start Command: gunicorn app:app
 ```
 
-GitHubの `main` へpushされたら自動デプロイする設定を推奨します。
-
-ルート確認:
+ヘルスチェック:
 
 ```text
 GET /
 → Bot is running!
 ```
 
+GitHub `main` へのpushで自動デプロイする設定を推奨します。
+
 ---
 
 # 7. Render環境変数
-
-現在必須または利用中:
 
 LINE:
 
@@ -280,28 +247,19 @@ GEMINI_API_KEY
 GEMINI_MODEL
 ```
 
-定期API:
+Scheduler:
 
 ```text
 SCHEDULER_SECRET
 ```
 
-`SCHEDULER_SECRET` は長いランダム文字列にし、GAS側と完全に同じ値を使います。
-
-Phase 1接続後に追加予定:
-
-```text
-NOTION_CARD_RULES_DATABASE_ID
-CARD_AUTO_REGISTER_MIN_MATCHES
-```
-
-まだ設定しなくても現在のBotには影響しません。
+`SCHEDULER_SECRET` は長いランダム値にし、GASと完全一致させます。
 
 ---
 
 # 8. Google Apps Script
 
-GitHub側の最新コードを同じApps Scriptプロジェクトへコピーします。
+同じApps ScriptプロジェクトへGitHubの最新版をコピーします。
 
 ```text
 gas/Code.gs
@@ -309,7 +267,7 @@ gas/FinanceReports.gs
 gas/DailyMemo.gs
 ```
 
-通常のApps ScriptプロジェクトはGitHubと自動同期されません。GitHub側の `.gs` を変更したら、Apps Script側へもコピーしてください。
+GitHubの `.gs` は通常、自動同期されません。GitHubで更新したらApps Script側にもコピーしてください。
 
 Script Properties:
 
@@ -331,7 +289,7 @@ checkCardEmails
 → 1時間ごと
 
 sendDailyCardPendingReminder
-→ 1日1回 20〜21時ごろ
+→ 毎日 20〜21時ごろ
 
 sendDailyMemoReminder
 → 毎日 朝8時ごろ
@@ -343,21 +301,35 @@ sendWeeklyFinanceReport
 → 毎週日曜日 20時ごろ
 ```
 
+カード通常監視は1時間ごとに動かし、コード内部では直近2時間を検索します。
+
 ---
 
 # 10. 2026年9月カード履歴の一括取り込み
 
-Apps Scriptで:
+Apps Scriptで次を手動実行します。
 
 ```text
 backfillSeptember2026
 ```
 
-を手動実行します。
+処理:
 
-9月前後のGmailを検索し、本文から実利用日を解析して `2026-09` だけを未処理DBへ追加します。個別通知はせず、最後に追加件数だけ通知します。
+```text
+9月前後のGmailを検索
+↓
+本文から実利用日を解析
+↓
+2026-09の利用だけ採用
+↓
+カード未処理DBへ追加
+↓
+個別LINE通知はしない
+↓
+最後に追加件数だけ通知
+```
 
-途中までジャンル処理済みでも問題ありません。保存済みはキューから消えているため、残りだけ処理できます。
+途中まで処理済みでも、残った未処理だけ後から続けられます。
 
 ---
 
@@ -369,7 +341,7 @@ LINEで:
 カード未処理
 ```
 
-表示内容:
+表示:
 
 ```text
 金額
@@ -389,66 +361,137 @@ LINEで:
 
 保存成功後は未処理ページをアーカイブし、自動で次の未処理を表示します。
 
-古いLINE通知を再度押した場合、`pending_id` がすでに処理済みなら家計簿へ二重登録しません。
+古い処理済み通知をもう一度押しても、`pending_id` が無効なら家計簿へ二重登録しません。
 
 ---
 
-# 12. AI検索
+# 12. LINE Postback 300文字エラー
+
+## 症状
+
+Render Logs:
+
+```text
+ValidationError: 1 validation error for PostbackAction
+data
+ensure this value has at most 300 characters
+```
+
+HTTP:
+
+```text
+POST /callback → 500
+```
+
+## 原因
+
+カード未処理のジャンルボタンへ以下を全部埋め込むと、日本語店名のURLエンコードによって300文字を超える場合があります。
+
+```text
+card
+store
+amount
+date
+cat
+pending_id
+```
+
+## 現在の修正版
+
+未処理カードではPostbackを短くしています。
+
+ジャンル選択:
+
+```text
+action=kakeibo_save
+pending_id=<Notion page id>
+cat=<ジャンル>
+```
+
+店名変更:
+
+```text
+action=card_change_store_start
+pending_id=<Notion page id>
+```
+
+`app.py` が受信後に:
+
+```text
+card_queue.get_item(pending_id)
+```
+
+を呼び、Notionからカード名・店名・金額・日付を復元します。
+
+## エラー発生後の復旧
+
+この500エラーはFlex生成段階で発生するため、未処理DBのページは通常そのまま残っています。
+
+1. GitHubの修正版がRenderへデプロイ済みか確認する。
+2. Render Logsで起動成功を確認する。
+3. LINEで `カード未処理` と送る。
+4. 残っている項目から続きを処理する。
+
+9月バックフィルをやり直す必要はありません。
+
+---
+
+# 13. AI検索
 
 ```text
 AI 今月の食費を分析して
 ```
 
-PythonでDB選択 → 最大2DB → AI改善ログ最大3件 → Gemini最終回答1回 → LINE向け整形、の順で処理します。
+処理:
 
-通常コマンドではGeminiを使いません。AI処理タイムアウトは60秒です。
+```text
+PythonでDB選択
+↓
+最大2DB取得
+↓
+AI改善ログから関連例を最大3件選択
+↓
+Gemini最終回答1回
+↓
+LINE向けプレーンテキスト
+```
 
-Markdownは禁止し、送信前にも `**`、`##`、コードフェンス等を除去します。
+AI処理タイムアウトは60秒です。
+
+Markdownは生成指示と送信前サニタイズの二重対策で除去します。
 
 ---
 
-# 13. AI改善
-
-AI回答後:
+# 14. AI改善
 
 ```text
 AI改善
 ```
 
-Botが「本当はどう答えてほしかったか」を聞き、質問 / AI回答 / 期待する回答 / 登録日時をAI改善ログDBへ保存します。
+直前の質問、AI回答、本当はどう答えてほしかったか、登録日時をNotionへ保存します。
 
 ---
 
-# 14. UIルール
+# 15. UIルール
 
 詳細は `UI_DESIGN.md` を参照してください。
 
-```text
-通常操作・保存・選択 → primary / 緑
-キャンセル・戻る     → secondary
-登録しない           → secondary
-削除                 → 確認画面を挟む
-```
-
-カードジャンルは2列、長い選択肢とメニューは原則1列です。
-
-将来のメインメニューはカテゴリ型へ移行します。
+重要:
 
 ```text
-🏠 今日
-💰 家計簿
-💳 カード
-🎯 予算・目標
-📝 メモ・保存
-🤖 AI
-⚙️ その他
+通常操作 → primary / 緑
+キャンセル・戻る・登録しない → secondary
+カードジャンル → 2列
+長い選択肢・メニュー → 原則1列
+Postback data → 必ず300文字以内
+DBで再取得可能な値 → Postbackへ埋め込まない
 ```
 
 ---
 
-# 15. 基本動作確認
+# 16. 動作確認
 
-デプロイ後:
+Render再デプロイ後:
 
 ```text
 メニュー
@@ -461,9 +504,19 @@ Botが「本当はどう答えてほしかったか」を聞き、質問 / AI回
 AI
 ```
 
-カードでは、店名変更、ジャンル2列、保存後の次項目表示、途中再開を確認します。
+カード未処理では:
 
-GASでは `checkCardEmails` を手動実行し、次を確認します。
+```text
+店名変更ボタンがある
+ジャンルが2列
+長い店名でも画面が表示される
+ジャンル保存できる
+保存後に次へ進む
+登録しないでも次へ進む
+途中でやめても後から再開できる
+```
+
+GASでは `checkCardEmails` を手動実行し、正常なら:
 
 ```text
 [解析成功]
@@ -471,29 +524,32 @@ GASでは `checkCardEmails` を手動実行し、次を確認します。
 LINEレスポンス: 200
 ```
 
+を確認します。
+
 ---
 
-# 16. トラブル時の最短確認
-
-詳しくは `MAINTENANCE.md` を参照してください。
+# 17. トラブル時の最短確認
 
 1. Render最新デプロイ成功?
 2. Render Logsに例外?
 3. GAS実行履歴にエラー?
-4. Notion DB列名・型が一致?
-5. IntegrationがDBへ接続?
-6. `SCHEDULER_SECRET` がGASとRenderで一致?
-7. GASへGitHub最新版をコピーした?
+4. Notion DBの列名・型は正しい?
+5. Integrationは対象DBに接続済み?
+6. `SCHEDULER_SECRET` はGAS/Renderで同一?
+7. GASへGitHub最新版をコピー済み?
+8. FlexエラーならPostback dataが300文字を超えていない?
+
+詳細は `MAINTENANCE.md` を参照してください。
 
 ---
 
-# 17. 開発を再開するとき
+# 18. 長期開発
 
-必ず `DEVELOPMENT.md` の「次に再開する場所」から進めます。
+`DEVELOPMENT.md` を唯一の進捗基準にします。
 
-現在はPhase 1のカード学習基盤まで作成済みで、次は `app.py` / `ui.py` への接続です。
+現在はPhase 1「カード自動化」が進行中です。`card_rules.py` の基盤は実装済みですが、まだLINEカード処理には接続していません。
 
-機能追加のたびに:
+機能追加ごとに:
 
 ```text
 README.md
@@ -505,7 +561,7 @@ DEVELOPMENT.md
 
 ---
 
-# 18. セキュリティ
+# 19. セキュリティ
 
 GitHub、README、Issue、チャットへ次を貼らないでください。
 
