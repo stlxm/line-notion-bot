@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from linebot.v3.messaging import FlexMessage, FlexContainer
 
@@ -35,14 +36,13 @@ def add_memo_to_notion(memo_text):
         res = requests.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             return f"メモを保存しました！\n\n【内容】{memo_text}\n【日時】{today_str}"
-        else:
-            return f"メモの保存に失敗しました (エラーコード: {res.status_code})"
+        return f"メモの保存に失敗しました (エラーコード: {res.status_code})"
     except Exception as e:
         return f"通信エラーが発生しました: {str(e)}"
 
 
 def get_memos_from_notion():
-    """NotionのメモDBから現在残っているメモ一覧（ページIDとタイトル）を取得します"""
+    """NotionのメモDBから現在残っているメモ一覧を取得します"""
     if not NOTION_MEMO_DATABASE_ID:
         return []
 
@@ -54,16 +54,24 @@ def get_memos_from_notion():
     }
 
     try:
-        res = requests.post(url, headers=headers, json={})
+        res = requests.post(
+            url,
+            headers=headers,
+            json={"sorts": [{"property": "日付", "direction": "descending"}]}
+        )
         memos = []
         if res.status_code == 200:
-            results = res.json().get("results", [])
-            for page in results:
+            for page in res.json().get("results", []):
                 page_id = page.get("id")
                 props = page.get("properties", {})
                 title_list = props.get("メモ", {}).get("title", [])
-                text_content = title_list[0]["text"]["content"] if title_list else "無題"
-                memos.append({"id": page_id, "title": text_content})
+                text_content = title_list[0].get("plain_text", "無題") if title_list else "無題"
+                date_start = props.get("日付", {}).get("date", {}) or {}
+                memos.append({
+                    "id": page_id,
+                    "title": text_content,
+                    "date": date_start.get("start", "")
+                })
         return memos
     except Exception as e:
         print(f"メモ取得エラー: {e}")
@@ -72,16 +80,18 @@ def get_memos_from_notion():
 
 def delete_memo_from_notion(page_id):
     """指定したメモページをNotion上で削除（アーカイブ）します"""
+    if not page_id:
+        return False
+
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
-    payload = {"archived": True}
 
     try:
-        res = requests.patch(url, headers=headers, json=payload)
+        res = requests.patch(url, headers=headers, json={"archived": True})
         return res.status_code == 200
     except Exception as e:
         print(f"メモ削除エラー: {e}")
@@ -89,43 +99,74 @@ def delete_memo_from_notion(page_id):
 
 
 def create_memo_delete_flex():
-    """削除対象のメモをボタンで並べたFlex Messageを生成します"""
+    """削除候補を読みやすい縦一覧で表示し、選択時はまだ削除しません。"""
     memos = get_memos_from_notion()
     if not memos:
         return None
 
-    buttons = []
-    for m in memos:
-        buttons.append({
-            "type": "button",
-            "style": "primary",
-            "height": "sm",
+    contents = [
+        {
+            "type": "text",
+            "text": "🗑️ メモを削除",
+            "weight": "bold",
+            "size": "lg"
+        },
+        {
+            "type": "text",
+            "text": "削除したいメモを選んでください。次の画面で内容を確認してから削除します。",
+            "size": "xs",
+            "color": "#777777",
+            "wrap": True,
+            "margin": "sm"
+        },
+        {"type": "separator", "margin": "md"}
+    ]
+
+    for index, m in enumerate(memos[:20], start=1):
+        title = m["title"] or "無題"
+        preview = title if len(title) <= 80 else title[:77] + "..."
+        date_text = m.get("date", "")[:10]
+
+        item_contents = [
+            {
+                "type": "text",
+                "text": f"{index}. {preview}",
+                "size": "sm",
+                "wrap": True,
+                "weight": "bold"
+            }
+        ]
+        if date_text:
+            item_contents.append({
+                "type": "text",
+                "text": date_text,
+                "size": "xxs",
+                "color": "#999999",
+                "margin": "xs"
+            })
+
+        contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "margin": "md",
+            "paddingAll": "10px",
+            "backgroundColor": "#F7F7F7",
+            "cornerRadius": "md",
+            "contents": item_contents,
             "action": {
                 "type": "postback",
-                "label": m["title"][:20],
-                "data": f"action=delete_memo&id={m['id']}&title={m['title'][:10]}"
+                "data": f"action=prepare_delete_memo&id={m['id']}&title={quote(title[:200], safe='')}"
             }
         })
 
-    # キャンセルボタンの追加
-    buttons.append({
-        "type": "button",
-        "style": "secondary",
-        "height": "sm",
-        "action": {
-            "type": "postback",
-            "label": "キャンセル",
-            "data": "action=cancel_registration"
-        }
-    })
-
-    rows = []
-    for i in range(0, len(buttons), 2):
-        rows.append({
-            "type": "box",
-            "layout": "horizontal",
-            "spacing": "sm",
-            "contents": buttons[i:i+2]
+    if len(memos) > 20:
+        contents.append({
+            "type": "text",
+            "text": f"ほか {len(memos) - 20} 件あります。古いメモは「メモ一覧」で確認できます。",
+            "size": "xxs",
+            "color": "#999999",
+            "wrap": True,
+            "margin": "md"
         })
 
     flex_json = {
@@ -133,16 +174,111 @@ def create_memo_delete_flex():
         "body": {
             "type": "box",
             "layout": "vertical",
+            "contents": contents
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
             "contents": [
-                {"type": "text", "text": "削除するメモを選択してください", "weight": "bold", "size": "md", "align": "center", "margin": "md"},
-                {"type": "separator", "margin": "lg"}
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "キャンセル",
+                        "data": "action=cancel_registration"
+                    }
+                }
+            ]
+        }
+    }
+    return FlexMessage(alt_text="削除するメモを選択", contents=FlexContainer.from_json(json.dumps(flex_json)))
+
+
+def create_memo_delete_confirm_flex(page_id, title):
+    """削除直前の確認Flex。ここで「削除する」を押した時だけ実削除します。"""
+    safe_title = title or "無題"
+    display_title = safe_title if len(safe_title) <= 300 else safe_title[:297] + "..."
+
+    flex_json = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "⚠️ 削除の確認",
+                    "weight": "bold",
+                    "size": "md",
+                    "color": "#D32F2F"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "このメモを削除しますか？",
+                    "weight": "bold",
+                    "size": "sm"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "md",
+                    "paddingAll": "12px",
+                    "backgroundColor": "#F7F7F7",
+                    "cornerRadius": "md",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": display_title,
+                            "size": "sm",
+                            "wrap": True
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "text": "削除後はLINEから元に戻せません。",
+                    "size": "xxs",
+                    "color": "#999999",
+                    "wrap": True,
+                    "margin": "md"
+                }
             ]
         },
         "footer": {
             "type": "box",
             "layout": "vertical",
             "spacing": "sm",
-            "contents": rows
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "color": "#D32F2F",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "削除する",
+                        "data": f"action=confirm_delete_memo&id={page_id}&title={quote(safe_title[:200], safe='')}"
+                    }
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "やめる",
+                        "data": "action=cancel_registration"
+                    }
+                }
+            ]
         }
     }
-    return FlexMessage(alt_text="メモ削除選択", contents=FlexContainer.from_json(json.dumps(flex_json)))
+    return FlexMessage(alt_text="メモ削除の確認", contents=FlexContainer.from_json(json.dumps(flex_json)))
