@@ -5,13 +5,15 @@ import requests
 from datetime import datetime
 from linebot.v3.messaging import FlexMessage, FlexContainer
 
+import fixed_rules
+
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_KAKEIBO_DATABASE_ID = os.environ.get("NOTION_KAKEIBO_DATABASE_ID", "")
 NOTION_MONTHLY_DATABASE_ID = os.environ.get("NOTION_MONTHLY_DATABASE_ID", "")
 NOTION_FIXED_DATABASE_ID = os.environ.get("NOTION_FIXED_DATABASE_ID", "")
 
-# LINEのジャンルボタンから除外するプロパティ名
-EXCLUDED_GENRES = ["固定費", "サブスク"]
+# 固定費 / サブスクもカード分類で選べるようにする。
+EXCLUDED_GENRES = []
 
 
 def get_notion_select_options(database_id, prop_name, exclude_list=None):
@@ -215,7 +217,7 @@ def create_card_notify_action_flex(card_name, store_name, amount, date_str):
 def create_card_notify_flex(card_name, store_name, amount, date_str):
     categories = get_notion_select_options(NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=EXCLUDED_GENRES)
     if not categories:
-        categories = ["食費", "日用品", "交通費", "娯楽"]
+        categories = ["食費", "日用品", "交通費", "娯楽", "固定費", "サブスク"]
 
     buttons = []
     for cat in categories:
@@ -418,7 +420,22 @@ def save_kakeibo_to_notion(card_name, store_name, amount, date_str, category):
     if not NOTION_KAKEIBO_DATABASE_ID:
         return "家計簿DB IDが設定されていません。"
 
-    # 日付の余計な空白や特殊文字を完全に除去してクレンジング
+    fixed_master_note = ""
+    if category in {"固定費", "サブスク"}:
+        fixed_ok, fixed_created = fixed_rules.ensure_fixed_expense(
+            store_name, amount, category, card_name
+        )
+        if not fixed_ok:
+            return (
+                "固定費マスタへの登録に失敗したため、家計簿への保存も中止しました。\n"
+                "未処理カードは残っています。Notionの固定費DB設定を確認して、もう一度選択してください。"
+            )
+        fixed_master_note = (
+            "固定費マスタへ新規登録し、今後の同じカード・同じ店のカード検出から除外します。"
+            if fixed_created else
+            "固定費マスタを更新し、今後の同じカード・同じ店のカード検出から除外します。"
+        )
+
     if date_str:
         date_str = re.sub(r'[^\d\-]', '', str(date_str)).strip()
 
@@ -450,13 +467,15 @@ def save_kakeibo_to_notion(card_name, store_name, amount, date_str, category):
         res = requests.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             budget_msg = get_budget_status(date_str, category)
+            note = f"\n\n【固定費設定】{fixed_master_note}" if fixed_master_note else ""
             return (
                 f"家計簿に記録しました！\n\n"
                 f"【店名】{store_name}\n"
                 f"【金額】¥{int(float(amount)):,}\n"
                 f"【ジャンル】{category}\n"
                 f"【支払方法】{card_name}\n"
-                f"【日付】{date_str}\n\n"
+                f"【日付】{date_str}"
+                f"{note}\n\n"
                 f"{budget_msg}"
             )
         else:
