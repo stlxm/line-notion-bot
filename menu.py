@@ -2,16 +2,12 @@ import json
 from linebot.v3.messaging import FlexMessage, FlexContainer
 
 
-def _button(label, text, style="secondary"):
+def _message_button(label, text, style="secondary"):
     return {
         "type": "button",
         "style": style,
         "height": "sm",
-        "action": {
-            "type": "message",
-            "label": label,
-            "text": text,
-        },
+        "action": {"type": "message", "label": label[:20], "text": text},
     }
 
 
@@ -20,74 +16,61 @@ def _postback_button(label, data, style="secondary"):
         "type": "button",
         "style": style,
         "height": "sm",
-        "action": {
-            "type": "postback",
-            "label": label,
-            "data": data,
-        },
+        "action": {"type": "postback", "label": label[:20], "data": data},
     }
 
 
-def _section(title, buttons, color="#666666"):
-    rows = []
-    for i in range(0, len(buttons), 2):
-        row_buttons = buttons[i:i + 2]
-        if len(row_buttons) == 1:
-            row_buttons.append({"type": "filler"})
-        rows.append({
-            "type": "box",
-            "layout": "horizontal",
-            "spacing": "sm",
-            "contents": row_buttons,
-        })
-
-    return [
-        {"type": "text", "text": title, "weight": "bold", "size": "sm", "color": color, "margin": "lg"},
-        *rows,
+def _section(title, description, buttons, color):
+    contents = [
+        {"type": "text", "text": title, "weight": "bold", "size": "md", "color": color, "margin": "lg", "wrap": True},
+        {"type": "text", "text": description, "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
     ]
+    # 2列ではなく1列表示。長い日本語ラベルでも見切れにくい。
+    contents.extend(buttons)
+    return contents
 
 
 def create_main_menu_flex():
-    """主要機能を1枚で見渡せるLINEメニューを作成します。"""
-    body_contents = [
-        {
-            "type": "text",
-            "text": "使いたい機能を選んでください",
-            "size": "sm",
-            "color": "#777777",
-            "wrap": True,
-        },
+    """主要機能を1枚・1列で見やすく表示します。"""
+    body = [
+        {"type": "text", "text": "使いたい機能を選んでください。文字が切れないよう、ボタンは全幅表示です。", "size": "sm", "color": "#666666", "wrap": True},
     ]
 
-    body_contents += _section(
-        "💳 家計簿・予算",
+    body += _section(
+        "📊 家計簿・予算",
+        "記録、今月の状況、予算、定期レポート",
         [
-            _postback_button("支出を入力", "action=quick_input_kakeibo", "primary"),
-            _button("予算一覧", "予算一覧", "primary"),
-            _button("予算を設定", "予算設定"),
-            _button("固定費一覧", "固定費一覧"),
-            _button("固定費を一括登録", "固定費"),
-            _button("固定費を追加", "固定費追加"),
+            _message_button("今月のダッシュボード", "今月", "primary"),
+            _postback_button("支出を入力する", "action=quick_input_kakeibo", "primary"),
+            _message_button("予算一覧を見る", "予算一覧"),
+            _message_button("予算アラートを見る", "予算アラート"),
+            _message_button("週次レポートを見る", "週次レポート"),
+            _message_button("予算を設定する", "予算設定"),
+            _message_button("固定費一覧を見る", "固定費一覧"),
+            _message_button("固定費を一括登録", "固定費"),
+            _message_button("固定費を追加する", "固定費追加"),
         ],
         "#1DB446",
     )
 
-    body_contents += _section(
+    body += _section(
         "📝 メモ",
+        "追加、一覧、確認付き削除",
         [
-            _postback_button("メモを追加", "action=quick_input_memo", "primary"),
-            _button("メモ一覧", "メモ一覧", "primary"),
-            _button("メモ削除", "メモ削除"),
+            _postback_button("メモを追加する", "action=quick_input_memo", "primary"),
+            _message_button("メモ一覧を見る", "メモ一覧", "primary"),
+            _message_button("メモを削除する", "メモ削除"),
         ],
         "#0288D1",
     )
 
-    body_contents += _section(
+    body += _section(
         "🗂 Notion・その他",
+        "汎用データ登録、Notion、ヘルプ",
         [
-            _button("データ追加", "データ追加"),
-            _button("Notionを開く", "Notion"),
-            _button("ヘルプ", "ヘルプ"),
+            _message_button("データを追加する", "データ追加"),
+            _message_button("Notionを開く", "Notion"),
+            _message_button("使い方を見る", "ヘルプ"),
         ],
         "#7B1FA2",
     )
@@ -99,18 +82,12 @@ def create_main_menu_flex():
             "type": "box",
             "layout": "vertical",
             "contents": [
-                {"type": "text", "text": "🏠 LINE Notion Bot", "weight": "bold", "size": "xl"},
+                {"type": "text", "text": "🏠 LINE Notion Bot", "weight": "bold", "size": "xl", "wrap": True},
                 {"type": "text", "text": "機能一覧", "size": "sm", "color": "#888888", "margin": "xs"},
             ],
         },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "spacing": "sm",
-            "contents": body_contents,
-        },
+        "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": body},
     }
-
     return FlexMessage(
         alt_text="LINE Notion Bot 機能一覧",
         contents=FlexContainer.from_json(json.dumps(flex_json, ensure_ascii=False)),
