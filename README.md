@@ -2,205 +2,61 @@
 
 LINE を入口に、**家計簿・予算管理・クレジットカード利用通知・メモ・Notion データ登録・AI検索**をまとめて扱う個人向けアシスタントです。
 
-現在の構成では、LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。日常操作はできるだけ LINE 上で完結するようにし、Flex Message を使ってボタンや一覧を見やすく表示します。
+現在の構成では LINE Messaging API、Notion API、Google Gemini、Gmail / Google Apps Script、Render を連携しています。日常操作はできるだけ LINE 上で完結し、Flex Message を使って長い日本語でも読みやすい UI にしています。
 
-> 初めて構築する場合は [SETUP.md](./SETUP.md) を先に参照してください。
+> 初めて構築する場合は [SETUP.md](./SETUP.md) を参照してください。
 >
-> Google Apps Script 関連の詳細は [gas/README.md](./gas/README.md) も参照してください。
+> Google Apps Script の詳細は [gas/README.md](./gas/README.md) も参照してください。
 
 ---
 
-## 1. この Bot でできること
+## 1. 重要な操作ルール
 
-### 1.1 家計簿
+この Bot は、登録済みのコマンドと AI 検索を明確に分けています。
 
-LINE から手動で支出を登録できます。
+### 通常機能
 
-```text
-支出 1200 ラーメン
-支出 500
-```
+家計簿、メモ、予算、固定費などは決められたコマンドで実行します。
 
-金額と店名を入力したあと、Notion の家計簿 DB に登録されている「ジャンル」「カード・支払方法」を LINE 上で選択できます。
+### AI検索
 
-店名に空白が含まれる場合も、店名全体を扱えるようにしています。
+Gemini API は**自動では呼び出しません**。
 
-### 1.2 クレジットカード利用メールの自動検知
-
-Gmail に届いたカード利用通知メールを Google Apps Script が定期的に確認し、対象メールを見つけると LINE へ Flex Message を直接 Push します。
-
-現在対応しているカード通知は以下です。
-
-- JCB
-- 三井住友カード
-- 楽天カード
-- PayPay カード
-
-現在の推奨運用は次のとおりです。
-
-- GAS 実行間隔: **1時間ごと**
-- 最終判定対象: **直近2時間以内のメール**
-- Gmail 検索自体は少し広めに取得
-- 既読 / 未読ではなく Gmail の Message ID で二重通知を防止
-- LINE 送信成功後に処理済み Message ID を保存
-- 可能な場合はメール受信日ではなく、本文内の実際のカード利用日を取得
-
-カード利用通知では、店名・金額・カード名を確認してから、ジャンル選択や店名修正へ進めます。
-
-### 1.3 予算管理
-
-Notion の「月別管理」DB に保存した予算を使い、全体予算とジャンル別予算を管理できます。
+AI を使いたい場合だけ、メッセージの先頭に `AI` を付けます。
 
 ```text
-予算 100000
-予算 食費 30000
-予算 2026-10 食費 35000
+AI 今月の食費について分析して
+AI 保存しているメモを整理して
+AI 家計簿の傾向を説明して
 ```
 
-一覧確認:
+`AI` の後には半角または全角スペースを入れてください。
 
 ```text
-予算一覧
+AI 質問内容
 ```
 
-表示内容には以下が含まれます。
+`AI` だけ送信すると、AI検索の使い方を表示します。この時点では Gemini API を呼び出しません。
 
-- 全体予算
-- 今月の使用額
-- 残額
-- ジャンル別予算
-- ジャンル別使用額
-- ジャンル別残額
+### 未登録コマンド
 
-### 1.4 家計簿ダッシュボード
+登録されていない文字列を送った場合、以前のように自動で Gemini へ送ることはありません。
 
 ```text
-今月
+そのコマンドはありません。メニューから機能を選んでください。
 ```
 
-またはメニューの「今月のダッシュボード」から表示できます。
+と案内し、そのままメインメニューを表示します。
 
-ダッシュボードでは、単純な支出合計だけでなく以下をまとめて確認できます。
-
-- 今月の総支出
-- 全体予算
-- 予算残額
-- 予算消化率
-- 月末までの残り日数
-- 残予算から計算した1日あたり使える金額
-- 支出額の大きいジャンル上位
-- カード・支払方法別の支出額
-
-### 1.5 予算アラート
-
-```text
-予算アラート
-```
-
-全体予算またはジャンル別予算が以下の水準に達しているかを判定します。
-
-- 80%以上
-- 90%以上
-- 100%以上 / 予算超過
-
-また、定期実行用 API `/api/budget-alert` を GAS から呼び出すことで、1日1回などの自動確認もできます。
-
-80%未満の場合、定期アラートは LINE へ送信しません。
-
-### 1.6 週次レポート
-
-```text
-週次レポート
-今週
-```
-
-直近7日間を集計し、前の7日間と比較します。
-
-主な表示内容:
-
-- 直近7日間の総支出
-- 登録件数
-- 前の7日間との金額差
-- 前期間比
-- ジャンル別支出上位
-
-GAS から `/api/weekly-report` を呼び出せば、毎週日曜日などに自動配信できます。
-
-### 1.7 固定費・サブスク
-
-Notion の固定費マスタから有効な項目を取得して、家計簿へ一括登録できます。
-
-```text
-固定費
-固定費一覧
-固定費追加 ジム会費 8000 固定費 三井住友カード
-```
-
-固定費マスタの `有効` チェックボックスが ON の項目が対象です。
-
-> 注意: 現在の実装では、同じ月に固定費一括登録を複数回実行した場合の完全な重複防止は未実装です。運用時は重複登録に注意してください。
-
-### 1.8 メモ
-
-メモを Notion に保存できます。
-
-```text
-メモ 牛乳を買う
-メモ一覧
-メモ削除
-```
-
-削除操作は誤操作防止のため、現在は次の2段階です。
-
-1. 削除候補一覧からメモを選ぶ
-2. メモ内容を確認して「削除する」を押す
-
-一覧では長いメモ内容も確認しやすいよう、短いボタン文字だけに依存しない UI に改善しています。
-
-### 1.9 メモの1日1回通知
-
-`gas/DailyMemo.gs` から Render の `/api/daily-memo` を呼び出すことで、保存中のメモ一覧を1日1回 LINE へ送信できます。
-
-推奨例:
-
-- 毎朝 8 時前後
-
-最大30件を通知し、それ以上ある場合は残件数を表示します。
-
-### 1.10 Notion への汎用データ追加
-
-```text
-データ追加
-```
-
-`NOTION_DATABASE_IDS` に登録されているデータベースを一覧化し、登録先を選択して各プロパティを対話形式で入力できます。
-
-### 1.11 URL 保存
-
-LINE に URL をそのまま送信すると、`NOTION_URL_DATABASE_ID` で指定したデータベースへ保存します。
-
-```text
-https://example.com
-```
-
-### 1.12 Notion / Gemini 検索
-
-専用コマンドに該当しない通常メッセージは、Notion 検索・Gemini 応答処理へ渡されます。
-
-例:
-
-```text
-今月の食費について教えて
-楽天カードの支出を確認したい
-```
-
-検索対象 DB は `NOTION_DATABASE_IDS` で指定します。
+これにより、誤入力や雑談で Gemini API の回数を消費することを防ぎます。
 
 ---
 
-## 2. LINE のメニュー
+## 2. この Bot でできること
 
-LINE で以下を送信します。
+### 2.1 メインメニュー
+
+LINE で次のいずれかを送信します。
 
 ```text
 メニュー
@@ -208,442 +64,648 @@ LINE で以下を送信します。
 機能一覧
 ```
 
-現在のメニューは横幅の狭い2列ボタンを避け、**基本的に1列・全幅**で表示する構成です。
+家計簿、予算、メモ、AI、Notion 関連の主要機能を Flex Message で表示します。
 
-これは日本語の長いボタン名が6文字前後で切れてしまう問題を軽減するための変更です。
-
-主な項目:
-
-### 家計簿・予算
-
-- 今月のダッシュボード
-- 支出を入力する
-- 予算一覧を見る
-- 予算を設定する
-- 予算アラートを見る
-- 週次レポートを見る
-- 固定費一覧を見る
-- 固定費を一括登録
-- 固定費を追加
-
-### メモ
-
-- メモを追加
-- メモ一覧を見る
-- メモを削除
-
-### Notion・その他
-
-- データ追加
-- Notion を開く
-- ヘルプ
-
-選択肢 UI も原則1列表示としており、ジャンル名・支払方法などの長い文字を確認しやすくしています。
+UI は2列ボタンを避け、原則として**1列・全幅表示**にしています。長い日本語の機能名や支払方法が数文字で切れにくい構成です。
 
 ---
 
-## 3. システム構成
+### 2.2 家計簿の手動登録
 
 ```text
-                        ┌────────────────────┐
-                        │       LINE         │
-                        │ Messaging API      │
-                        └─────────┬──────────┘
-                                  │ Webhook / Push
-                    ┌─────────────┴─────────────┐
-                    │                           │
-          ┌─────────▼─────────┐       ┌────────▼─────────┐
-          │      Render       │       │ Google Apps      │
-          │ Flask / Gunicorn  │       │ Script           │
-          └──────┬─────┬──────┘       └───────┬──────────┘
-                 │     │                       │
-          Notion API   │ Gemini API            │ Gmail
-                 │     │                       │
-          ┌──────▼──┐ ┌▼──────────┐     ┌──────▼──────┐
-          │ Notion  │ │ Gemini    │     │ Card mails  │
-          │ DB群    │ │           │     │ JCB etc.    │
-          └─────────┘ └───────────┘     └─────────────┘
-
-カード通知:
-Gmail → GAS → LINE Push(Flex) → ユーザー操作 → LINE Webhook → Render → Notion
-
-定期レポート:
-GAS Trigger → Render Scheduler API → LINE Push
+支出 1200 ラーメン
+支出 500 コンビニ
+支出 3200 新宿 レストラン
 ```
 
-カード通知は、GAS が `CARD_NOTIFY|...` のようなテキストを Bot 自身へ送って Webhook を起こす方式ではありません。
+金額と店名を受け取り、その後に Notion の家計簿 DB から取得した「ジャンル」と「カード・支払方法」を LINE 上で選択します。
 
-**GAS が LINE Push API へ Flex Message を直接送信し、その Flex の postback ボタン操作だけが Render の `/callback` に届く**構成です。
-
----
-
-## 4. ファイル構成
-
-| ファイル | 役割 |
-|---|---|
-| `app.py` | Flask 本体、LINE Webhook、コマンド分岐、Postback、定期通知 API |
-| `kakeibo.py` | 家計簿保存、予算残高、固定費、カード通知用 Flex |
-| `budget.py` | 月別予算・支出集計、予算一覧 Flex |
-| `insights.py` | 家計簿ダッシュボード、予算アラート、週次レポート |
-| `memo.py` | メモ追加・取得・削除・削除確認 UI |
-| `menu.py` | LINE メインメニュー |
-| `ui.py` | 長い文字を見やすくする共通選択 UI |
-| `notion_helper.py` | Notion DB 情報取得、データ追加、URL保存、Gemini関連処理 |
-| `prompt.txt` | AI 応答用プロンプト |
-| `requirements.txt` | Python 依存パッケージ |
-| `gas/Code.gs` | Gmail カード利用メール監視、LINE Flex Push |
-| `gas/DailyMemo.gs` | メモ一覧の日次通知 |
-| `gas/FinanceReports.gs` | 予算アラート・週次レポートの定期呼び出し |
-| `gas/README.md` | GAS の補足設定資料 |
-| `SETUP.md` | 初期構築・移行・動作確認手順 |
+店名に空白が含まれていても、店名全体を保存します。
 
 ---
 
-## 5. Render 環境変数
+### 2.3 クレジットカード利用メールの自動検知
 
-| Key | 必須 | 用途 |
-|---|---:|---|
-| `LINE_CHANNEL_ACCESS_TOKEN` | 必須 | LINE Messaging API のアクセストークン |
-| `LINE_CHANNEL_SECRET` | 必須 | LINE Webhook 署名検証 |
-| `ADMIN_USER_ID` | 定期通知利用時必須 | 日次メモ・予算アラート・週次レポートの送信先 LINE User ID |
-| `GEMINI_API_KEY` | AI利用時必須 | Gemini API |
-| `NOTION_API_KEY` | Notion利用時必須 | Notion Integration Secret |
-| `NOTION_KAKEIBO_DATABASE_ID` | 家計簿利用時必須 | 家計簿 DB |
-| `NOTION_MONTHLY_DATABASE_ID` | 予算利用時必須 | 月別管理 DB |
-| `NOTION_FIXED_DATABASE_ID` | 固定費利用時必須 | 固定費マスタ DB |
-| `NOTION_MEMO_DATABASE_ID` | メモ利用時必須 | メモ DB |
-| `NOTION_URL_DATABASE_ID` | URL保存利用時必須 | URL 保存先 DB |
-| `NOTION_DATABASE_IDS` | AI検索/汎用追加利用時 | 対象 DB ID をカンマ区切りで指定 |
-| `NOTION_PAGE_URL` | 任意 | `Notion` コマンドで返すショートカット URL |
-| `SCHEDULER_SECRET` | 定期API利用時必須 | GAS → Render の定期通知 API 認証用秘密鍵 |
+Gmail に届いたカード利用通知メールを Google Apps Script が定期確認し、該当メールを見つけた場合は **GAS から LINE Push API へ Flex Message を直接送信**します。
 
-秘密情報は GitHub に直接書かず、Render の Environment Variables に設定してください。
+対応カード:
+
+- JCB
+- 三井住友カード
+- 楽天カード
+- PayPay カード
+
+推奨運用:
+
+- GAS 実行間隔: **1時間ごと**
+- 実処理対象: **直近2時間以内のメール**
+- Gmail 検索は少し広めに取得
+- 既読 / 未読状態には依存しない
+- Gmail Message ID を使って二重通知を防止
+- LINE Push 成功後に処理済み Message ID を記録
+- 本文に利用日がある場合はメール受信日より利用日を優先
+
+カード通知後は LINE 上で、店名確認、店名修正、ジャンル選択、登録キャンセルを行えます。
 
 ---
 
-## 6. GAS Script Properties
+## 3. 予算管理
 
-Google Apps Script の「プロジェクトの設定 → スクリプト プロパティ」に設定します。
+### 全体予算
 
-| Key | 使用ファイル | 用途 |
+```text
+予算 100000
+```
+
+### ジャンル別予算
+
+```text
+予算 食費 30000
+予算 日用品 10000
+```
+
+### 年月指定
+
+```text
+予算 2026-10 食費 35000
+```
+
+### 予算一覧
+
+```text
+予算一覧
+```
+
+表示内容:
+
+- 全体予算
+- 当月支出
+- 残額
+- ジャンル別予算
+- ジャンル別支出
+- ジャンル別残額
+
+---
+
+## 4. 家計簿ダッシュボード
+
+```text
+今月
+```
+
+または:
+
+```text
+ダッシュボード
+家計簿ダッシュボード
+```
+
+表示内容:
+
+- 今月の総支出
+- 全体予算
+- 予算残額
+- 予算消化率
+- 月末までの残り日数
+- 残予算から算出した1日あたり利用可能額
+- 支出額の大きいジャンル
+- カード・支払方法別支出
+
+日常的に家計状況を確認する場合は `今月` が最も便利です。
+
+---
+
+## 5. 予算アラート
+
+```text
+予算アラート
+```
+
+全体予算およびジャンル別予算について、以下の水準を判定します。
+
+- 80%以上
+- 90%以上
+- 100%以上 / 予算超過
+
+支出を保存した直後にも予算状況をチェックし、80%以上に到達している項目がある場合は Flex Message を表示します。
+
+定期実行 API:
+
+```text
+POST /api/budget-alert
+```
+
+この API は `SCHEDULER_SECRET` による認証が必要です。
+
+---
+
+## 6. 週次レポート
+
+```text
+週次レポート
+```
+
+または:
+
+```text
+今週
+週間レポート
+```
+
+表示内容:
+
+- 直近7日間の支出合計
+- 支出件数
+- その前の7日間との比較
+- 増減額
+- 増減率
+- 今週の支出上位ジャンル
+
+定期実行 API:
+
+```text
+POST /api/weekly-report
+```
+
+`gas/FinanceReports.gs` の `sendWeeklyFinanceReport()` から週1回呼び出せます。
+
+---
+
+## 7. 固定費・サブスク
+
+### 固定費一覧
+
+```text
+固定費一覧
+```
+
+### 今月分を一括登録
+
+```text
+固定費
+```
+
+### 固定費を追加
+
+```text
+固定費追加 Netflix 1490 サブスク JCB
+固定費追加 ジム会費 8000 固定費 三井住友カード
+```
+
+Notion の固定費マスタ DB で `有効` が ON の項目が対象です。
+
+> 現在の改善候補として、同じ月の同じ固定費を重複登録しない仕組みの強化があります。
+
+---
+
+## 8. メモ機能
+
+### 保存
+
+```text
+メモ 牛乳を買う
+```
+
+### 一覧
+
+```text
+メモ一覧
+```
+
+### 削除
+
+```text
+メモ削除
+```
+
+削除は安全のため2段階です。
+
+```text
+メモ削除
+  ↓
+削除候補一覧
+  ↓
+対象メモを選択
+  ↓
+「このメモを削除しますか？」確認
+  ↓
+削除する / やめる
+```
+
+候補一覧ではメモ本文をできるだけ読めるように表示し、選択しただけでは削除されません。
+
+---
+
+## 9. メモの1日1回通知
+
+Render API:
+
+```text
+POST /api/daily-memo
+```
+
+`gas/DailyMemo.gs` の `sendDailyMemoReminder()` から呼び出します。
+
+推奨トリガー:
+
+```text
+毎日 08:00 前後
+```
+
+保存中のメモを LINE へ一覧送信します。
+
+---
+
+## 10. Notion の汎用データ追加
+
+```text
+データ追加
+```
+
+`NOTION_DATABASE_IDS` に登録されている DB を一覧化し、登録先を選択した後、対応するプロパティを順番に入力します。
+
+最後に内容確認を行い、`はい` で保存します。
+
+---
+
+## 11. URL保存
+
+http / https から始まる URL をそのまま LINE へ送信すると、`NOTION_URL_DATABASE_ID` で指定した DB に保存します。
+
+```text
+https://example.com/article
+```
+
+---
+
+## 12. Notionリンク
+
+```text
+Notion
+```
+
+`NOTION_PAGE_URL` が設定されていれば、その URL を返信します。
+
+---
+
+## 13. AI検索 / Gemini
+
+現在の AI モデルは `gemini-3.6-flash` です。
+
+AI検索は通常コマンドとは分離されています。
+
+### APIを使わない例
+
+```text
+こんにちは
+適当な文字
+明日の予定
+```
+
+これらは未登録コマンドとしてメニューを表示し、Gemini API は呼び出しません。
+
+### APIを使う例
+
+```text
+AI 今月の家計簿を分析して
+```
+
+この場合だけ Gemini を呼び出します。
+
+Gemini の無料枠にはモデルごとのリクエスト制限があるため、明示的な AI モードにすることで API 消費を抑えています。
+
+### AIプロバイダについて
+
+このプロジェクトでは現時点で Gemini を維持します。
+
+理由:
+
+- 日本語の自然言語処理品質が高い
+- 長いコンテキストを扱える
+- すでに `google-genai` を使った実装が完成している
+- Notion の情報を渡して分析する用途と相性が良い
+- AI を明示コマンドだけに限定すれば、不要な API 消費を大幅に減らせる
+
+API回数が将来不足する場合は、Gemini Flash-Lite 系や Groq 上のオープンモデルをフォールバックとして追加する選択肢があります。
+
+---
+
+## 14. システム構成
+
+```text
+                         ┌─────────────────┐
+                         │     Notion      │
+                         │ 家計簿 / 予算   │
+                         │ メモ / URL / DB │
+                         └────────┬────────┘
+                                  │
+                                  │ Notion API
+                                  │
+┌─────────┐   Webhook    ┌───────▼────────┐
+│  LINE   │─────────────▶│ Render / Flask │
+│         │◀─────────────│     app.py      │
+└────▲────┘ Reply / Push └───────┬────────┘
+     │                            │
+     │                            ├── Gemini API
+     │                            │   ※ AI prefix時のみ
+     │                            │
+     │                   ┌────────▼────────┐
+     │                   │ budget/insights │
+     │                   │ memo/kakeibo    │
+     │                   └─────────────────┘
+     │
+     │ LINE Push API
+     │
+┌────┴──────────────┐
+│ Google Apps Script│
+├───────────────────┤
+│ Code.gs           │◀──── Gmailカード通知
+│ DailyMemo.gs      │
+│ FinanceReports.gs │
+└───────────────────┘
+```
+
+---
+
+## 15. ファイル構成
+
+```text
+line-notion-bot/
+├── app.py
+├── kakeibo.py
+├── budget.py
+├── insights.py
+├── memo.py
+├── menu.py
+├── ui.py
+├── notion_helper.py
+├── prompt.txt
+├── requirements.txt
+├── README.md
+├── SETUP.md
+└── gas/
+    ├── Code.gs
+    ├── DailyMemo.gs
+    ├── FinanceReports.gs
+    └── README.md
+```
+
+### `app.py`
+
+- Flask Web サーバー
+- LINE Webhook
+- コマンドルーティング
+- Postback処理
+- AIモード判定
+- 未登録コマンド処理
+- 定期通知 API
+
+### `kakeibo.py`
+
+- 支出保存
+- 予算保存
+- 固定費
+- カード通知用 Flex
+- Notion セレクト取得
+
+### `budget.py`
+
+- 月単位の予算 / 支出集計
+- 予算一覧 Flex
+- Notion ページネーション
+
+### `insights.py`
+
+- 家計簿ダッシュボード
+- 予算アラート
+- 週次レポート
+
+### `memo.py`
+
+- メモ追加
+- 一覧取得
+- 確認付き削除
+
+### `menu.py`
+
+- メインメニュー Flex
+- AI検索の明示入口
+
+### `ui.py`
+
+- 長い日本語を読みやすくする共通 Flex UI
+- ジャンル・支払方法選択
+- カード通知後のジャンル選択
+
+### `notion_helper.py`
+
+- Notion 汎用 DB 操作
+- URL保存
+- Gemini AI 呼び出し
+
+### `gas/Code.gs`
+
+- Gmail カード利用通知検出
+- LINE Flex 直接 Push
+- Message ID 重複防止
+
+### `gas/DailyMemo.gs`
+
+- 日次メモ通知 API 呼び出し
+
+### `gas/FinanceReports.gs`
+
+- 予算アラート API 呼び出し
+- 週次レポート API 呼び出し
+
+---
+
+## 16. Render 環境変数
+
+| Key | 用途 | 必須 |
 |---|---|---|
-| `LINE_USER_ID` | `Code.gs` | カード通知の送信先 |
-| `LINE_CHANNEL_ACCESS_TOKEN` | `Code.gs` | GAS から LINE Push API を呼ぶためのトークン |
-| `RENDER_BASE_URL` | `DailyMemo.gs`, `FinanceReports.gs` | Render の URL。例 `https://xxxx.onrender.com` |
-| `SCHEDULER_SECRET` | `DailyMemo.gs`, `FinanceReports.gs` | Render 側と同じ定期 API 用秘密鍵 |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Messaging API | 必須 |
+| `LINE_CHANNEL_SECRET` | LINE Webhook署名検証 | 必須 |
+| `GEMINI_API_KEY` | Gemini API | AI使用時 |
+| `NOTION_API_KEY` | Notion Integration | 必須 |
+| `NOTION_KAKEIBO_DATABASE_ID` | 家計簿 DB | 家計簿使用時 |
+| `NOTION_MONTHLY_DATABASE_ID` | 月別管理 DB | 予算使用時 |
+| `NOTION_FIXED_DATABASE_ID` | 固定費 DB | 固定費使用時 |
+| `NOTION_MEMO_DATABASE_ID` | メモ DB | メモ使用時 |
+| `NOTION_URL_DATABASE_ID` | URL保存 DB | URL保存時 |
+| `NOTION_DATABASE_IDS` | 汎用登録 / AI参照対象 | 任意 |
+| `NOTION_PAGE_URL` | Notionショートカット | 任意 |
+| `ADMIN_USER_ID` | 定期Push先LINE User ID | 定期通知時 |
+| `SCHEDULER_SECRET` | GAS→Render API認証 | 定期通知時 |
 
-`LINE_CHANNEL_ACCESS_TOKEN` や `SCHEDULER_SECRET` を GAS のソースコードへ直接書かないでください。
-
----
-
-## 7. Notion データベース仕様
-
-### 7.1 家計簿 DB
-
-必要なプロパティ:
-
-| プロパティ | 型 |
-|---|---|
-| `内容・店名` | Title |
-| `金額` | Number |
-| `日付` | Date |
-| `ジャンル` | Select |
-| `カード・支払方法` | Select |
-| `月別管理` | Relation |
-
-### 7.2 月別管理 DB
-
-| プロパティ | 型 |
-|---|---|
-| `年月` | Title |
-| `全体予算` | Number |
-| `食費予算` など `○○予算` | Number |
-
-ジャンル別予算は、家計簿のジャンル名 + `予算` の名前にしてください。
-
-例:
-
-```text
-食費 → 食費予算
-交通費 → 交通費予算
-娯楽 → 娯楽予算
-```
-
-`budget.py` は、月別管理 DB の **末尾が「予算」の Number プロパティ**を一覧対象として扱います。
-
-### 7.3 固定費マスタ DB
-
-| プロパティ | 型 |
-|---|---|
-| `内容・店名` | Title |
-| `金額` | Number |
-| `ジャンル` | Select |
-| `カード・支払方法` | Select |
-| `有効` | Checkbox |
-
-### 7.4 メモ DB
-
-| プロパティ | 型 |
-|---|---|
-| `メモ` | Title |
-| `日付` | Date |
-
-### 7.5 URL 保存 DB
-
-現行コードでは最低限、以下を使用します。
-
-| プロパティ | 型 |
-|---|---|
-| `URL` | Title |
+秘密情報を GitHub のソースコードへ直接書かないでください。
 
 ---
 
-## 8. 定期実行
+## 17. GAS Script Properties
 
-### カード利用通知
-
-`gas/Code.gs`
-
-推奨:
+### カード通知用
 
 ```text
-checkCardEmails
-1時間ごと
+LINE_USER_ID
+LINE_CHANNEL_ACCESS_TOKEN
 ```
 
-コード側では直近2時間以内を最終対象にします。
-
-### 日次メモ
-
-`gas/DailyMemo.gs`
-
-推奨:
+### Render定期通知用
 
 ```text
-sendDailyMemoReminder
-毎日 朝8時前後
+RENDER_BASE_URL
+SCHEDULER_SECRET
 ```
 
-### 予算アラート
-
-`gas/FinanceReports.gs`
-
-推奨:
-
-```text
-sendDailyBudgetAlert
-毎日 20時前後
-```
-
-80%以上の対象が存在するときだけ LINE 通知します。
-
-### 週次レポート
-
-```text
-sendWeeklyFinanceReport
-毎週日曜日 20時前後
-```
+`SCHEDULER_SECRET` は Render と GAS で同じ値を設定します。
 
 ---
 
-## 9. Render API
+## 18. 推奨 GAS トリガー
 
-| Method | Path | 用途 | 認証 |
+| 関数 | 推奨頻度 | 用途 |
+|---|---|---|
+| `checkCardEmails` | 1時間ごと | カード利用メール確認 |
+| `sendDailyMemoReminder` | 毎日朝 | メモ一覧通知 |
+| `sendDailyBudgetAlert` | 毎日夜 | 80%以上の予算のみ通知 |
+| `sendWeeklyFinanceReport` | 毎週日曜夜 | 週次レポート |
+
+---
+
+## 19. 主な Render API
+
+| Path | Method | 用途 | 認証 |
 |---|---|---|---|
-| `GET/HEAD` | `/` | ヘルスチェック | なし |
-| `POST` | `/callback` | LINE Webhook | LINE署名 |
-| `POST` | `/api/daily-memo` | メモ一覧通知 | `X-API-KEY: SCHEDULER_SECRET` |
-| `POST` | `/api/budget-alert` | 予算アラート | `X-API-KEY: SCHEDULER_SECRET` |
-| `POST` | `/api/weekly-report` | 週次レポート | `X-API-KEY: SCHEDULER_SECRET` |
-| `POST` | `/api/register-fixed` | 固定費一括登録 | 現状なし |
-| `POST` | `/api/monthly-notice` | 月初予算設定通知 | 現状なし |
-
-> `register-fixed` と `monthly-notice` は既存実装との互換性のため現状無認証です。外部公開 URL で運用するため、将来的には `SCHEDULER_SECRET` 保護へ統一することを推奨します。
+| `/` | GET / HEAD | ヘルスチェック | なし |
+| `/callback` | POST | LINE Webhook | LINE署名 |
+| `/api/daily-memo` | POST | メモ一覧Push | `X-API-KEY` |
+| `/api/budget-alert` | POST | 予算アラートPush | `X-API-KEY` |
+| `/api/weekly-report` | POST | 週次レポートPush | `X-API-KEY` |
+| `/api/register-fixed` | POST | 固定費一括登録 | 現在改善候補 |
+| `/api/monthly-notice` | POST | 月初予算確認 | 現在改善候補 |
 
 ---
 
-## 10. 主な LINE コマンド
+## 20. コマンド早見表
 
-| 入力 | 動作 |
+| コマンド | 動作 |
 |---|---|
-| `メニュー` | 全機能メニュー |
+| `メニュー` | 全機能表示 |
 | `今月` | 家計簿ダッシュボード |
-| `支出 1200 ラーメン` | 手動支出登録開始 |
-| `予算一覧` | 月別・ジャンル別予算一覧 |
-| `予算 100000` | 今月の全体予算設定 |
-| `予算 食費 30000` | 今月の食費予算設定 |
-| `予算アラート` | 80/90/100% 判定 |
-| `週次レポート` / `今週` | 直近7日レポート |
-| `固定費` | 固定費一括登録 |
-| `固定費一覧` | 固定費マスタ一覧 |
-| `固定費追加 ...` | 固定費マスタ追加 |
+| `支出 1200 店名` | 手動支出登録 |
+| `予算一覧` | 予算一覧 |
+| `予算 100000` | 全体予算設定 |
+| `予算 食費 30000` | ジャンル予算設定 |
+| `予算アラート` | 予算警告確認 |
+| `週次レポート` | 直近7日レポート |
+| `固定費一覧` | 固定費一覧 |
+| `固定費` | 今月の固定費一括登録 |
+| `固定費追加 ...` | 固定費追加 |
 | `メモ 内容` | メモ追加 |
 | `メモ一覧` | メモ一覧 |
 | `メモ削除` | 確認付き削除 |
-| `データ追加` | 汎用 Notion DB 追加 |
-| `Notion` | Notion ショートカット URL |
-| URLそのもの | URL保存 DB へ保存 |
-| `ヘルプ` | 操作説明 |
+| `データ追加` | 汎用Notion登録 |
+| `Notion` | Notionリンク |
+| `AI 質問` | Gemini AI検索 |
+| `AI` | AIの使い方 |
+| `ヘルプ` | コマンド説明 |
 
 ---
 
-## 11. セキュリティ上の注意
+## 21. セキュリティ
 
-### LINE Channel Access Token
-
-Channel Access Token をチャット、GitHub、スクリーンショット等へ公開した場合は、そのトークンを再利用せず LINE Developers で再発行してください。
-
-再発行後は以下の両方を更新します。
-
-```text
-Render:
-LINE_CHANNEL_ACCESS_TOKEN
-
-GAS Script Properties:
-LINE_CHANNEL_ACCESS_TOKEN
-```
-
-### Scheduler Secret
-
-`SCHEDULER_SECRET` は十分長いランダム文字列にし、以下で同じ値を使用します。
-
-```text
-Render Environment:
-SCHEDULER_SECRET
-
-GAS Script Properties:
-SCHEDULER_SECRET
-```
-
-秘密鍵そのものをリポジトリへコミットしないでください。
+- LINE Channel Access Token を GitHub に書かない
+- LINE Channel Secret を GitHub に書かない
+- Notion API Key を GitHub に書かない
+- Gemini API Key を GitHub に書かない
+- `SCHEDULER_SECRET` を公開しない
+- トークンをチャットや公開リポジトリへ貼った場合は再発行する
+- GAS では Script Properties を使用する
+- Render では Environment Variables を使用する
 
 ---
 
-## 12. トラブルシューティング
+## 22. トラブルシューティング
 
-### LINE に返信が来ない
+### 未登録の文字を送ったらAIが動く
 
-1. Render の Deploy が成功しているか確認
-2. Render Logs を確認
-3. LINE Developers の Webhook URL が `/callback` になっているか確認
-4. Webhook 利用が ON か確認
-5. `LINE_CHANNEL_SECRET` と `LINE_CHANNEL_ACCESS_TOKEN` を確認
+現在の `app.py` では動かない仕様です。Render が最新 `main` をデプロイしているか確認してください。
 
-### カード利用通知が届かない
+### AIが動かない
 
-GAS の実行ログを確認します。
-
-確認するログ例:
+入力形式を確認します。
 
 ```text
-[JCB] Gmail検索: ...
-[JCB] ヒットしたスレッド数: ...
-[JCB] 候補メール: ...
-[解析成功] ...
-[LINE Flex送信] ...
-LINEレスポンス: 200 ...
+AI 質問内容
 ```
 
-`ヒットしたスレッド数: 0` の場合は、メール送信元・件名・検索期間を確認してください。
+さらに Render の `GEMINI_API_KEY` とログを確認してください。
 
-`LINEレスポンス: 401` の場合は LINE Channel Access Token を確認してください。
+### AIの無料回数を使い切る
 
-### 同じカード通知が何度も来る
+通常操作では AI を呼ばないため、まず `AI` プレフィックス運用で使用回数を抑えます。それでも不足する場合は Flash-Lite 系または別 AI のフォールバックを検討します。
 
-`Code.gs` は処理済み Gmail Message ID を Script Properties に保存します。Script Properties を削除・リセットした場合、期間内のメールが再通知される可能性があります。
+### カード通知が届かない
 
-### 予算一覧が出ない
+`gas/Code.gs` の実行ログを確認します。
 
-以下を確認します。
+確認点:
 
-- `NOTION_MONTHLY_DATABASE_ID`
-- `年月` が Title 型か
-- `全体予算` が Number 型か
-- ジャンル別列が `食費予算` のような名前か
-- Notion Integration が DB に接続されているか
+- Gmail検索ヒット数
+- 2時間以内判定
+- 処理済み Message ID
+- LINE Push API の HTTP status
+- GAS の `LINE_USER_ID`
+- GAS の `LINE_CHANNEL_ACCESS_TOKEN`
 
-### ダッシュボードの支出が合わない
+### 予算一覧が取得できない
 
-家計簿 DB の以下の型・名称を確認します。
+Notion の以下を確認します。
 
-```text
-金額: Number
-日付: Date
-ジャンル: Select
-カード・支払方法: Select
-```
+- `年月`
+- `全体予算`
+- `○○予算`
+- 家計簿の `日付`
+- 家計簿の `金額`
+- 家計簿の `ジャンル`
 
-### 日次メモ / 予算アラート / 週次レポートが 401
+### 定期通知が401
 
-Render と GAS で `SCHEDULER_SECRET` が一致しているか確認してください。
-
-### Notion 保存が 400
-
-Notion 側のプロパティ名と型がコードと一致しているかを確認してください。
+Render と GAS の `SCHEDULER_SECRET` が一致しているか確認します。
 
 ---
 
-## 13. 現在の既知の改善候補
+## 23. 開発時のドキュメント運用
 
-現在でも運用できますが、今後改善すると安全性・使いやすさが上がる項目です。
+機能追加、コマンド変更、環境変数追加、GASトリガー変更、API追加、UI変更などを行った場合は、**コード変更と同時に `README.md` と `SETUP.md` も更新する**運用とします。
 
-1. 固定費の月内重複登録防止
-2. `/api/register-fixed` と `/api/monthly-notice` の認証統一
-3. 予算アラートを80%・90%・100%の各到達時に一度だけ通知する履歴管理
-4. `user_states` の Redis 等への移行（Render 再起動時の会話状態消失防止）
-5. Notion API エラー時のリトライ・タイムアウト統一
-6. 自動テスト / GitHub Actions の追加
+特に以下は必ずドキュメントへ反映します。
 
----
-
-## 14. 技術スタック
-
-- Python
-- Flask
-- Gunicorn
-- LINE Messaging API / `line-bot-sdk`
-- Notion API
-- Google Gemini / `google-genai`
-- Google Apps Script
-- Gmail
-- Render
-
-依存ライブラリは `requirements.txt` を参照してください。
+- 新しい LINE コマンド
+- 削除 / 登録など操作フローの変更
+- 新しい環境変数
+- GAS Script Properties
+- GAS トリガー
+- Render API
+- AIモデル / AI起動条件
+- Notion DB のプロパティ変更
 
 ---
 
-## 15. 開発時の基本フロー
+## 24. 現在の改善候補
 
-```text
-GitHub main へ変更をコミット
-        ↓
-Render が自動デプロイ
-        ↓
-Render Logs で起動確認
-        ↓
-LINE で動作確認
-```
-
-GAS ファイルについては、GitHub の `gas/*.gs` を変更しても、通常のスタンドアロン Google Apps Script プロジェクトには自動反映されません。
-
-GitHub 側を更新した場合は、GAS 側にも同じコードを反映してください。
+- 固定費の月内二重登録防止
+- 予算アラートを80% / 90% / 100%到達時に各1回だけ送信
+- `/api/register-fixed` の `SCHEDULER_SECRET` 認証
+- `/api/monthly-notice` の `SCHEDULER_SECRET` 認証
+- `user_states` の Redis 等への永続化
+- Gemini API 上限超過時のフォールバック AI
 
 ---
 
-## 16. 最小動作確認チェック
+## 25. 開発方針
 
-デプロイ後は以下を順番に確認すると問題箇所を切り分けやすくなります。
+この Bot は、AIだけに依存するチャットボットではなく、**日常操作は確実なコマンド処理、必要なときだけAI**という構成を基本方針とします。
 
-```text
-1. Render URL の / が 200 を返す
-2. LINE Webhook の検証が成功する
-3. 「メニュー」が表示される
-4. 「今月」が表示される
-5. 「予算一覧」が表示される
-6. 「メモ一覧」が表示される
-7. 「支出 100 テスト」が登録できる
-8. GAS の checkCardEmails を手動実行する
-9. 日次/週次 GAS を手動実行し 200 を確認する
-```
-
-より詳細な構築手順は [SETUP.md](./SETUP.md) を参照してください。
+この設計により、API コストと利用上限を抑えながら、家計簿・メモ・Notion 管理の安定性を優先できます。
