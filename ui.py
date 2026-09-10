@@ -67,21 +67,28 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
 def create_card_category_flex(card, store, amount, date_str, categories, pending_id=None):
     """カード利用のジャンル選択UI。
 
-    ジャンル名は短いため2列表示にし、未処理キューから開いた場合は
-    店名変更ボタンも同じ画面に表示します。
+    ジャンルは2列表示。未処理キューのボタンはLINEのPostback data
+    300文字制限を超えないよう、pending_idと必要最小限の値だけ送ります。
+    実データはPostback受信後にNotionキューから再取得します。
     """
     category_buttons = []
     for category in categories:
-        params = {
-            "action": "kakeibo_save",
-            "card": card,
-            "store": store,
-            "amount": amount,
-            "date": date_str,
-            "cat": category,
-        }
         if pending_id:
-            params["pending_id"] = pending_id
+            params = {
+                "action": "kakeibo_save",
+                "pending_id": pending_id,
+                "cat": category,
+            }
+        else:
+            params = {
+                "action": "kakeibo_save",
+                "card": card,
+                "store": store,
+                "amount": amount,
+                "date": date_str,
+                "cat": category,
+            }
+
         category_buttons.append({
             "type": "button",
             "style": "primary",
@@ -117,10 +124,6 @@ def create_card_category_flex(card, store, amount, date_str, categories, pending
                 "label": "店名を変更する",
                 "data": urlencode({
                     "action": "card_change_store_start",
-                    "card": card,
-                    "store": store,
-                    "amount": amount,
-                    "date": date_str,
                     "pending_id": pending_id,
                 }),
             },
