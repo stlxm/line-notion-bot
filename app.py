@@ -21,13 +21,14 @@ import menu
 import budget
 import insights
 import ui
+import ai_feedback
+import ai_engine
 
 app = Flask(__name__)
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 NOTION_PAGE_URL = os.environ.get("NOTION_PAGE_URL", "")
-NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 NOTION_KAKEIBO_DATABASE_ID = os.environ.get("NOTION_KAKEIBO_DATABASE_ID", "")
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
 SCHEDULER_SECRET = os.environ.get("SCHEDULER_SECRET", "")
@@ -154,9 +155,9 @@ def push_line(user_id, messages):
 
 
 def start_db_selection(user_id, reply_token):
-    db_list = [db_id.strip() for db_id in NOTION_DATABASE_IDS.split(",") if db_id.strip()]
+    db_list = notion_helper.get_all_database_ids()
     if not db_list:
-        reply_line(reply_token, "登録先データベースが設定されていません。NOTION_DATABASE_IDS を確認してください。")
+        reply_line(reply_token, "登録先データベースが設定されていません。RenderのNotion DB環境変数を確認してください。")
         return
 
     display_names = [notion_helper.get_database_title(db_id) for db_id in db_list]
@@ -212,8 +213,7 @@ def _run_ai_search(user_id, reply_token, query):
 
         def target_task():
             try:
-                notion_context = notion_helper.fetch_notion_context()
-                result_container["response"] = notion_helper.generate_gemini_response(msg, notion_context)
+                result_container["response"] = ai_engine.generate_response(msg)
             except Exception as e:
                 result_container["response"] = f"AI検索でエラーが発生しました: {str(e)}"
 
@@ -222,9 +222,16 @@ def _run_ai_search(user_id, reply_token, query):
         worker.join(timeout=60)
 
         if worker.is_alive():
-            push_line(uid, "AI検索が60秒の制限を超えました。もう一度試してください。")
+            timeout_answer = "AI検索が60秒の制限を超えました。もう一度試してください。"
+            ai_feedback.remember_ai_interaction(uid, msg, timeout_answer)
+            push_line(uid, timeout_answer)
         else:
-            push_line(uid, result_container.get("response", "AIから応答を取得できませんでした。"))
+            answer = result_container.get("response", "AIから応答を取得できませんでした。")
+            ai_feedback.remember_ai_interaction(uid, msg, answer)
+            push_line(uid, [
+                TextMessage(text=answer),
+                TextMessage(text="回答が期待と違う場合は「AI改善」と送ると、今回の質問と回答を改善ログに残せます。"),
+            ])
 
     threading.Thread(target=background_ai_search, args=(user_id, query)).start()
 
@@ -340,8 +347,46 @@ def handle_message(event):
     user_message = event.message.text.strip()
     reply_token = event.reply_token
 
+    if user_id in user_states and user_states[user_id].get("step") == "WAITING_AI_FEEDBACK":
+        state = user_states.pop(user_id)
+        if user_message == "キャンセル":
+            reply_line(reply_token, "AI改善の登録をキャンセルしました。")
+            return
+        success, message = ai_feedback.save_feedback(
+            state["question"],
+            state["answer"],
+            user_message,
+        )
+        if success:
+            ai_feedback.clear_last_ai_interaction(user_id)
+            reply_line(reply_token, f"✅ {message}\n\n今後、似たAI質問ではこの改善例を自動で参考にします。")
+        else:
+            reply_line(reply_token, f"⚠️ {message}\n入力内容は保存されていません。")
+        return
+
     if user_message in ["メニュー", "機能", "機能一覧", "menu", "Menu"]:
         reply_line(reply_token, [menu.create_main_menu_flex()])
+        return
+
+    if user_message in ["AI改善", "AIフィードバック", "AI修正"]:
+        last = ai_feedback.get_last_ai_interaction(user_id)
+        if not last:
+            reply_line(reply_token, "改善対象の直前AI回答がありません。\n先に「AI 質問内容」でAIへ質問して、その回答後に「AI改善」と送ってください。")
+            return
+        user_states[user_id] = {
+            "step": "WAITING_AI_FEEDBACK",
+            "question": last["question"],
+            "answer": last["answer"],
+        }
+        reply_line(
+            reply_token,
+            "🧠 AI改善を記録します。\n\n"
+            f"【あなたの質問】\n{last['question']}\n\n"
+            f"【AIの回答】\n{last['answer'][:800]}\n\n"
+            "本当はどのように答えてほしかったですか？\n"
+            "理想の回答、含めてほしい情報、判断方法、書き方などをそのまま送ってください。\n"
+            "やめる場合は「キャンセル」と送信してください。"
+        )
         return
 
     if user_message in ["今月", "ダッシュボード", "家計簿ダッシュボード", "今月の家計簿"]:
@@ -626,17 +671,22 @@ def handle_message(event):
             "・URL保存: URLをそのまま送信\n"
             "・Notionリンク: Notion\n\n"
             "◆ AI検索\n"
-            "AIは自動では呼び出しません。\n"
-            "「AI 」の後に質問を書いたときだけGeminiを使用します。\n"
-            "例: AI 今月の食費について分析して"
+            "・質問: AI 質問内容\n"
+            "・回答改善: AI改善\n"
+            "AIは「AI 」を付けた質問だけGeminiを使用します。"
         )
         reply_line(reply_token, help_text)
         return
 
-    if user_message == "AI" or user_message == "ai" or user_message == "Ai":
+    if user_message in ["AI", "ai", "Ai"]:
         reply_line(
             reply_token,
-            "【AI検索の使い方】\nAIの後に半角または全角スペースを入れて質問してください。\n\n例: AI 今月の食費について分析して\n例: AI メモの内容を整理して\n\nAIを付けない通常メッセージではGemini APIを呼び出しません。"
+            "【AI検索の使い方】\n"
+            "AIの後に半角または全角スペースを入れて質問してください。\n\n"
+            "例: AI 今月の食費について分析して\n"
+            "例: AI メモの内容を整理して\n\n"
+            "回答が期待と違った場合は、その直後に「AI改善」と送ってください。\n"
+            "過去の改善例は、似た質問の回答品質向上に利用されます。"
         )
         return
 
