@@ -67,12 +67,22 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
 def create_card_category_flex(card, store, amount, date_str, categories, pending_id=None):
     """カード利用のジャンル選択UI。
 
-    ジャンルは2列表示。未処理キューのボタンはLINEのPostback data
-    300文字制限を超えないよう、pending_idと必要最小限の値だけ送ります。
-    実データはPostback受信後にNotionキューから再取得します。
+    ジャンルは2列表示。カード分類では「固定費」は表示せず、
+    「サブスク」はNotion側の選択肢に無くても必ず表示します。
+    未処理キューのボタンはLINEのPostback data 300文字制限を超えないよう、
+    pending_idと必要最小限の値だけ送ります。
     """
+    cleaned_categories = []
+    for category in categories or []:
+        category = str(category).strip()
+        if not category or category == "固定費" or category in cleaned_categories:
+            continue
+        cleaned_categories.append(category)
+    if "サブスク" not in cleaned_categories:
+        cleaned_categories.append("サブスク")
+
     category_buttons = []
-    for category in categories:
+    for category in cleaned_categories:
         if pending_id:
             params = {
                 "action": "kakeibo_save",
