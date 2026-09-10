@@ -45,7 +45,7 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
             "layout": "vertical",
             "contents": [
                 {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
-                {"type": "text", "text": "選択肢は1列表示です。通常操作は緑、キャンセルのみ控えめに表示します。", "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
+                {"type": "text", "text": "通常操作は緑、キャンセルのみ控えめに表示します。", "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
             ],
         },
         "body": {
@@ -65,7 +65,12 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
 
 
 def create_card_category_flex(card, store, amount, date_str, categories, pending_id=None):
-    buttons = []
+    """カード利用のジャンル選択UI。
+
+    ジャンル名は短いため2列表示にし、未処理キューから開いた場合は
+    店名変更ボタンも同じ画面に表示します。
+    """
+    category_buttons = []
     for category in categories:
         params = {
             "action": "kakeibo_save",
@@ -77,24 +82,66 @@ def create_card_category_flex(card, store, amount, date_str, categories, pending
         }
         if pending_id:
             params["pending_id"] = pending_id
-        data = urlencode(params)
-        buttons.append({
+        category_buttons.append({
             "type": "button",
             "style": "primary",
             "height": "sm",
-            "action": {"type": "postback", "label": category[:20], "data": data},
+            "flex": 1,
+            "action": {
+                "type": "postback",
+                "label": str(category)[:10],
+                "data": urlencode(params),
+            },
+        })
+
+    rows = []
+    for i in range(0, len(category_buttons), 2):
+        row_buttons = category_buttons[i:i + 2]
+        if len(row_buttons) == 1:
+            row_buttons.append({"type": "box", "layout": "vertical", "flex": 1, "contents": []})
+        rows.append({
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": row_buttons,
+        })
+
+    action_buttons = []
+    if pending_id:
+        action_buttons.append({
+            "type": "button",
+            "style": "primary",
+            "height": "sm",
+            "action": {
+                "type": "postback",
+                "label": "店名を変更する",
+                "data": urlencode({
+                    "action": "card_change_store_start",
+                    "card": card,
+                    "store": store,
+                    "amount": amount,
+                    "date": date_str,
+                    "pending_id": pending_id,
+                }),
+            },
         })
 
     skip_data = "action=cancel_registration"
     if pending_id:
         skip_data = urlencode({"action": "skip_card_pending", "pending_id": pending_id})
 
-    buttons.append({
+    action_buttons.append({
         "type": "button",
         "style": "secondary",
         "height": "sm",
         "action": {"type": "postback", "label": "登録しない", "data": skip_data},
     })
+
+    footer_contents = rows
+    if rows and action_buttons:
+        footer_contents = rows + [{"type": "separator", "margin": "md"}] + action_buttons
+    else:
+        footer_contents = rows + action_buttons
 
     flex_json = {
         "type": "bubble",
@@ -114,6 +161,7 @@ def create_card_category_flex(card, store, amount, date_str, categories, pending
                 {"type": "text", "text": "利用先", "size": "xs", "color": "#aaaaaa"},
                 {"type": "text", "text": store, "weight": "bold", "size": "md", "wrap": True, "margin": "xs"},
                 {"type": "text", "text": f"カード: {card}", "size": "sm", "color": "#666666", "wrap": True, "margin": "md"},
+                {"type": "text", "text": f"利用日: {date_str}", "size": "sm", "color": "#666666", "wrap": True, "margin": "xs"},
                 {"type": "separator", "margin": "lg"},
                 {"type": "text", "text": "ジャンルを選択してください", "size": "sm", "weight": "bold", "margin": "lg", "wrap": True},
             ],
@@ -122,7 +170,7 @@ def create_card_category_flex(card, store, amount, date_str, categories, pending
             "type": "box",
             "layout": "vertical",
             "spacing": "sm",
-            "contents": buttons,
+            "contents": footer_contents,
         },
     }
     return FlexMessage(
