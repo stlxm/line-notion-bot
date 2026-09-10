@@ -15,6 +15,7 @@ README.md は「現在できること」、SETUP.md は「構築・設定方法�
 - 次回は必ず「次に再開する場所」から開始する。
 - UIは機能数が増えてもメインメニューを巨大化させず、カテゴリ → サブメニュー → 操作の3段階以内にする。
 - Geminiを使わなくて済む処理はPython / Notion / GASで行う。
+- LINE Postback `data` は300文字以内にする。DB上に実データがある操作では、Postbackへ店名・金額などを重複格納せずIDだけ送る。
 
 ---
 
@@ -53,6 +54,14 @@ README.md は「現在できること」、SETUP.md は「構築・設定方法�
 - 削除など危険操作: 確認画面を挟む。通常画面では強調しすぎない。
 - 同格のジャンルは2列表示可能。長い文字列は1列。
 
+## Postback設計
+
+- LINE SDKの `PostbackAction.data` は300文字上限。
+- 永続データがNotionにある場合、Postbackは `action + page_id/pending_id + 最小限の選択値` だけにする。
+- 未処理カードのジャンル選択では `pending_id + cat` のみ送る。
+- 店名変更では `pending_id` のみ送る。
+- 実際のカード名 / 店名 / 金額 / 日付は `card_queue.get_item()` でNotionから再取得する。
+
 ---
 
 # 3. フェーズ別ロードマップ
@@ -90,7 +99,9 @@ README.md は「現在できること」、SETUP.md は「構築・設定方法�
 - [x] 店名比較用の正規化エンジンを実装 (#2の基盤)
 - [x] 店名ごとの学習回数 / 一致回数 / 推奨ジャンル保存ロジックを実装 (#1の基盤)
 - [x] ユーザー明示ON/OFFの自動登録フラグと、安全側の自動登録判定を実装 (#5/#6の基盤)
-- [ ] `app.py` / カード未処理UIへ接続
+- [x] 未処理カードPostbackを短縮し、300文字上限超過を防止
+- [x] Postback受信後に `pending_id` から実データを再取得する構造へ変更
+- [ ] `app.py` / カード未処理UIへ `card_rules` を接続
 - [ ] ジャンル確定時に `learn_category()` を呼ぶ
 - [ ] おすすめジャンルをカード画面へ表示
 - [ ] 家計簿完全重複チェック (#7)
@@ -218,6 +229,7 @@ CARD_AUTO_REGISTER_MIN_MATCHES
 - 未処理を1件ずつ連続処理
 - 保存 / スキップ後の未処理ページアーカイブ
 - 古いLINE通知からの二重登録防止（pending_id方式）
+- 未処理カードPostbackの300文字上限対策
 - 2026年9月カード履歴バックフィル
 - 未処理件数の日次通知
 - 家計簿入力
@@ -236,7 +248,7 @@ CARD_AUTO_REGISTER_MIN_MATCHES
 
 # 5. 次に再開する場所
 
-次回は **Phase 1の接続作業** から開始する。
+次回は **Phase 1のカード学習接続作業** から開始する。
 
 正確な再開順:
 
@@ -255,7 +267,37 @@ Phase 1完了後にPhase 2へ進む。
 
 ---
 
-# 6. 変更履歴
+# 6. 障害記録
+
+## 2026-09-11: カード未処理ジャンル選択でHTTP 500
+
+症状:
+
+```text
+ValidationError: PostbackAction data
+ensure this value has at most 300 characters
+```
+
+原因:
+
+- ジャンルボタンのPostbackに `card / store / amount / date / category / pending_id` をすべてURLエンコードしていた。
+- 日本語店名はURLエンコードすると大きくなり、LINE PostbackAction.dataの300文字上限を超えた。
+
+修正:
+
+- 未処理カードでは `pending_id + category` だけ送信。
+- 店名変更は `pending_id` だけ送信。
+- `app.py` が `card_queue.get_item(pending_id)` でNotionから実データを復元。
+- 未処理DBそのものは壊れていないため、デプロイ後は残りから継続可能。
+
+再発防止:
+
+- IDで再取得できるデータをPostbackへ埋め込まない。
+- UI追加時は300文字上限を設計レビュー項目に含める。
+
+---
+
+# 7. 変更履歴
 
 ## 2026-09-11
 
@@ -263,4 +305,6 @@ Phase 1完了後にPhase 2へ進む。
 - DEVELOPMENT / MAINTENANCE / UI_DESIGN を追加。
 - `card_rules.py` を追加。
 - 店名正規化・ジャンル学習・安全な自動登録判定の基盤を実装。
-- 次回再開位置を「Phase 1のLINE接続作業」に更新。
+- カード未処理ジャンル選択でPostback 300文字超過障害を確認。
+- 未処理PostbackをID参照方式へ変更し、長い店名でもFlex生成できる構造に修正。
+- 次回再開位置を「Phase 1のカード学習接続作業」に更新。
