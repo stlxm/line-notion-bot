@@ -6,8 +6,8 @@
 //
 // LINE_CHANNEL_ACCESS_TOKEN はソースコードへ直接書かないでください。
 
-const SEARCH_INTERVAL_MINUTES = 1440; // 24時間
-const GMAIL_SEARCH_DAYS = 2;           // Gmail検索は少し広め。最終判定は上の分数で行う
+const SEARCH_INTERVAL_MINUTES = 120; // 直近2時間を対象
+const GMAIL_SEARCH_DAYS = 2;          // Gmail検索は少し広め。最終判定は上の2時間で行う
 const LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push";
 const PROCESSED_IDS_KEY = "PROCESSED_CARD_MESSAGE_IDS";
 const MAX_PROCESSED_IDS = 200;
@@ -236,7 +236,7 @@ function processCardThreads(query, cutoff, cardName, amountRegex, storeRegex, us
   });
 
   Logger.log(
-    `[${cardName}] 集計: スレッド=${threads.length}, メール=${messageCount}, 24時間以内=${withinWindowCount}, 重複=${duplicateCount}, 解析成功=${parsedCount}`
+    `[${cardName}] 集計: スレッド=${threads.length}, メール=${messageCount}, 2時間以内=${withinWindowCount}, 重複=${duplicateCount}, 解析成功=${parsedCount}`
   );
 }
 
