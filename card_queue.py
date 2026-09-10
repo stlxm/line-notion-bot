@@ -46,7 +46,6 @@ def _title_value(prop):
 
 def _page_to_item(page):
     props = page.get("properties", {})
-    state_obj = props.get("状態", {}).get("select") or {}
     date_obj = props.get("利用日", {}).get("date") or {}
     return {
         "id": page.get("id"),
@@ -55,7 +54,6 @@ def _page_to_item(page):
         "store": _rich_text_value(props.get("利用先", {})),
         "amount": props.get("金額", {}).get("number") or 0,
         "date": date_obj.get("start", ""),
-        "status": state_obj.get("name", ""),
         "notified": bool(props.get("通知済み", {}).get("checkbox", False)),
     }
 
@@ -81,7 +79,6 @@ def enqueue_card(message_id, card, store, amount, date_str):
             "利用先": {"rich_text": [{"text": {"content": str(store)}}]},
             "金額": {"number": float(amount)},
             "利用日": {"date": {"start": str(date_str)}},
-            "状態": {"select": {"name": "未処理"}},
             "通知済み": {"checkbox": False},
             "登録日時": {"date": {"start": datetime.now(JST).isoformat()}},
         },
@@ -103,18 +100,28 @@ def update_store(page_id, store):
     return _patch(page_id, {"利用先": {"rich_text": [{"text": {"content": str(store)}}]}})
 
 
+def remove(page_id):
+    """処理済み/スキップ済みのキュー項目をNotionでアーカイブして一覧から消します。"""
+    if not page_id:
+        return False
+    res = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=_headers(),
+        json={"archived": True},
+        timeout=10,
+    )
+    if res.status_code != 200:
+        print(f"カード未処理DBアーカイブエラー ({res.status_code}): {res.text}")
+        return False
+    return True
+
+
 def complete(page_id):
-    return _patch(page_id, {
-        "状態": {"select": {"name": "完了"}},
-        "完了日時": {"date": {"start": datetime.now(JST).isoformat()}},
-    })
+    return remove(page_id)
 
 
 def skip(page_id):
-    return _patch(page_id, {
-        "状態": {"select": {"name": "スキップ"}},
-        "完了日時": {"date": {"start": datetime.now(JST).isoformat()}},
-    })
+    return remove(page_id)
 
 
 def _patch(page_id, properties):
@@ -135,7 +142,6 @@ def _patch(page_id, properties):
 def get_pending_items(limit=100):
     results = _query({
         "page_size": min(limit, 100),
-        "filter": {"property": "状態", "select": {"equals": "未処理"}},
         "sorts": [
             {"property": "利用日", "direction": "ascending"},
             {"property": "登録日時", "direction": "ascending"},
