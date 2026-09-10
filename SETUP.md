@@ -1,87 +1,50 @@
 # LINE Notion Bot セットアップガイド
 
-このドキュメントは、LINE・Notion・Gemini・Google Apps Script・Gmail・Render を連携し、この Bot をゼロから構築・更新するための手順書です。
+このドキュメントは、LINE・Notion・Gemini・Gmail・Google Apps Script・Render を連携して、このBotを構築・更新するための手順書です。
 
-現在の構成には、家計簿・予算・固定費・メモ・カード通知・カード未処理キュー・週次レポート・日次通知・Notion検索・Gemini AI検索・AI回答改善が含まれます。
+現在の構成には、家計簿・予算・固定費・メモ・カード即時通知・カード未処理キュー・日次/週次通知・Notion検索・Gemini AI検索・AI回答改善が含まれます。
 
 ---
 
 # 1. 全体構成
 
 ```text
-LINE
-  ├─ 通常コマンド
-  │     ↓
-  │   Render / Flask
-  │     ├─ 家計簿 / 予算 / メモ
-  │     ├─ カード未処理キュー
-  │     └─ Notion API
-  │
-  ├─ AI 質問
-  │     ↓
-  │   Python DB Router
-  │     ↓
-  │   必要な最大2DBをNotionから取得
-  │     ↓
-  │   AI改善ログから関連例を最大3件取得
-  │     ↓
-  │   Gemini 1回
-  │     ↓
-  │   LINE向けプレーンテキスト整形
-  │     ↓
-  │   LINE回答
-  │
-  └─ AI改善
-        ↓
-      直前の質問・AI回答を保持
-        ↓
-      「本当はどうしてほしかったか」を入力
-        ↓
-      AI改善ログDBへ保存
-
-カード利用メール
+カード会社メール
   ↓
 Gmail
   ↓
-Google Apps Script
+GAS
   ↓
 Render /api/card-pending
   ↓
-Notion カード未処理DB
+カード未処理DBへ一時保存
   ↓
-LINEへ即時利用通知
+LINEへ即時通知
   ↓
 ジャンル保存 / 登録しない
   ↓
-未処理DBからアーカイブ
+未処理ページをアーカイブ
   ↓
-次の未処理カードを表示
+次の未処理カードを自動表示
+
+LINE AI質問
+  ↓
+Python DB Router
+  ↓
+必要な最大2DB
+  ↓
+関連するAI改善例
+  ↓
+Gemini 1回
+  ↓
+LINE向けプレーンテキスト
 ```
 
 ---
 
-# 2. 必要なサービス
+# 2. Notion DB
 
-- GitHub
-- Render
-- LINE Developers
-- Notion
-- Google アカウント
-  - Gmail
-  - Google Apps Script
-  - Google AI Studio / Gemini API
-
-任意:
-
-- UptimeRobot 等の外部監視サービス
-
----
-
-# 3. Notion DB の作成
-
-プロパティ名はコードと一致させてください。
-
-## 3.1 家計簿 DB
+## 家計簿 DB
 
 | 名前 | 型 |
 |---|---|
@@ -92,19 +55,17 @@ LINEへ即時利用通知
 | カード・支払方法 | Select |
 | 月別管理 | Relation |
 
-## 3.2 月別管理 DB
+## 月別管理 DB
 
 | 名前 | 型 |
 |---|---|
 | 年月 | Title |
 | 全体予算 | Number |
-| 食費予算 | Number |
-| 日用品予算 | Number |
-| その他必要なジャンル予算 | Number |
+| 食費予算など | Number |
 
-ジャンル別予算は `ジャンル名 + 予算` の形式にしてください。
+ジャンル別予算は `ジャンル名 + 予算` の形式にします。
 
-## 3.3 固定費マスタ DB
+## 固定費マスタ DB
 
 | 名前 | 型 |
 |---|---|
@@ -114,173 +75,65 @@ LINEへ即時利用通知
 | カード・支払方法 | Select |
 | 有効 | Checkbox |
 
-## 3.4 メモ DB
+## メモ DB
 
 | 名前 | 型 |
 |---|---|
 | メモ | Title |
 | 日付 | Date |
 
-## 3.5 URL保存 DB
+## URL保存 DB
 
 | 名前 | 型 |
 |---|---|
 | URL | Title |
 
-## 3.6 AI改善ログ DB
+## AI改善ログ DB
 
-DB名の例:
+| 名前 | 型 |
+|---|---|
+| 質問 | Title |
+| AI回答 | Rich text |
+| 期待する回答 | Rich text |
+| 登録日時 | Date |
 
-```text
-AI改善ログ
-```
-
-プロパティ:
-
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `質問` | Title | 元のAI質問 |
-| `AI回答` | Rich text | 実際に返した回答 |
-| `期待する回答` | Rich text | 本当はどう答えてほしかったか |
-| `登録日時` | Date | 改善ログ保存日時 |
-
-このDBは通常検索用ではなく、似た質問の改善例だけを取り出す専用DBです。
-
-## 3.7 カード未処理 DB
-
-今回追加するキュー専用DBです。
-
-DB名の例:
+環境変数:
 
 ```text
-カード未処理
+NOTION_AI_FEEDBACK_DATABASE_ID
 ```
 
-次のプロパティを**名前と型を合わせて**作成してください。
+## カード未処理 DB
 
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `GmailMessageID` | Title | Gmailメッセージの重複識別 |
-| `カード` | Rich text | JCB / 三井住友カード / 楽天カード / PayPay など |
-| `利用先` | Rich text | 店名・利用先 |
-| `金額` | Number | 利用金額 |
-| `利用日` | Date | 実際の利用日 |
-| `通知済み` | Checkbox | 即時LINE通知済みか |
-| `登録日時` | Date | キューへ入れた日時 |
+新しく作成する一時キューです。名前は `カード未処理` などで構いません。
 
-`状態` や `完了日時` は現在の実装では不要です。
+プロパティ名と型を次に合わせてください。
 
-このDBは履歴DBではありません。
+| 名前 | 型 |
+|---|---|
+| `GmailMessageID` | Title |
+| `カード` | Rich text |
+| `利用先` | Rich text |
+| `金額` | Number |
+| `利用日` | Date |
+| `通知済み` | Checkbox |
+| `登録日時` | Date |
+
+環境変数:
 
 ```text
-未処理の間だけ存在
-↓
-家計簿へ保存成功
-または
-登録しない
-↓
-該当ページを archived=true にして通常表示から消す
+NOTION_CARD_PENDING_DATABASE_ID
 ```
 
-Notion API には一般的な完全削除APIがないため、コード上の「削除」はアーカイブを意味します。通常のDBビュー・クエリからは消えます。
+このDBは履歴保存用ではありません。未処理のカード利用だけを保持し、家計簿への保存成功または `登録しない` の選択後は、Notion APIでページを `archived=true` にして通常の一覧・検索から消します。
+
+Notion Integration をこのDBにも接続し、ページ作成・更新・アーカイブができる権限を与えてください。
 
 ---
 
-# 4. Notion Integration
+# 3. Render 環境変数
 
-1. Notion で Integration を作成します。
-2. API Secret を取得します。
-3. 家計簿・月別管理・固定費・メモ・URL保存・AI改善ログ・カード未処理・その他AI検索対象DBすべてに Integration を接続します。
-4. 各DBの Database ID を控えます。
-
-書き込み権限が必要なDB:
-
-- 家計簿
-- 月別管理
-- 固定費
-- メモ
-- URL保存
-- AI改善ログ
-- カード未処理
-
-カード未処理DBではページ作成・プロパティ更新・アーカイブを行います。
-
----
-
-# 5. LINE Messaging API
-
-LINE Developers で Messaging API チャネルを作成します。
-
-取得する値:
-
-```text
-LINE_CHANNEL_SECRET
-LINE_CHANNEL_ACCESS_TOKEN
-```
-
-Webhook URL:
-
-```text
-https://YOUR-RENDER-DOMAIN.onrender.com/callback
-```
-
-Webhook利用をONにしてください。
-
-アクセストークンを過去に公開したことがある場合は再発行し、Render と GAS の両方を更新してください。
-
----
-
-# 6. Gemini API
-
-Google AI Studio で API Key を作成します。
-
-Render 環境変数:
-
-```text
-GEMINI_API_KEY
-```
-
-任意:
-
-```text
-GEMINI_MODEL
-```
-
-未設定時は現在:
-
-```text
-gemini-3.6-flash
-```
-
-を使用します。
-
-AIは次の形式だけ起動します。
-
-```text
-AI 質問内容
-```
-
-未登録の通常文章は Gemini に送りません。
-
----
-
-# 7. Render Web Service
-
-推奨設定:
-
-```text
-Runtime: Python
-Build Command: pip install -r requirements.txt
-Start Command: gunicorn app:app
-```
-
-GitHub `main` へのPushで自動デプロイする設定にしておくと更新が楽です。
-
----
-
-# 8. Render 環境変数
-
-## LINE
+LINE:
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
@@ -288,9 +141,7 @@ LINE_CHANNEL_SECRET
 ADMIN_USER_ID
 ```
 
-`ADMIN_USER_ID` は日次通知、週次レポート、カード未処理件数通知などの送信先です。
-
-## Notion
+Notion:
 
 ```text
 NOTION_API_KEY
@@ -305,52 +156,73 @@ NOTION_DATABASE_IDS
 NOTION_PAGE_URL
 ```
 
-### NOTION_CARD_PENDING_DATABASE_ID
-
-新しく作成した `カード未処理` DB の Database ID を設定します。
-
-```text
-NOTION_CARD_PENDING_DATABASE_ID=カード未処理DBのID
-```
-
-### NOTION_DATABASE_IDS の考え方
-
-専用DBは個別の環境変数へ入れます。
-
-```text
-NOTION_KAKEIBO_DATABASE_ID
-NOTION_MONTHLY_DATABASE_ID
-NOTION_FIXED_DATABASE_ID
-NOTION_MEMO_DATABASE_ID
-NOTION_URL_DATABASE_ID
-NOTION_AI_FEEDBACK_DATABASE_ID
-NOTION_CARD_PENDING_DATABASE_ID
-```
-
-それ以外のAI検索・汎用データ追加対象DBだけを `NOTION_DATABASE_IDS` にカンマ区切りで入れてください。
-
-`AI改善ログ` と `カード未処理` は特殊用途なので `NOTION_DATABASE_IDS` へ重複登録する必要はありません。
-
-## Gemini
+Gemini:
 
 ```text
 GEMINI_API_KEY
 GEMINI_MODEL
 ```
 
-## Scheduler / GAS認証
+定期API:
 
 ```text
 SCHEDULER_SECRET
 ```
 
-十分長いランダム文字列を設定してください。値をチャットやGitHubへ貼らないでください。
+`SCHEDULER_SECRET` は長いランダム値にし、GAS側にも同じ値を設定します。チャットやGitHubに貼らないでください。
+
+`NOTION_DATABASE_IDS` には、専用環境変数で指定していない追加のAI検索/汎用登録対象DBだけをカンマ区切りで入れる運用を推奨します。`AI改善ログ` と `カード未処理` は特殊用途なので重複登録不要です。
 
 ---
 
-# 9. Google Apps Script の Script Properties
+# 4. LINE Developers
 
-GAS の「プロジェクトの設定」→「スクリプト プロパティ」に設定します。
+Messaging API チャネルを作成し、次をRenderへ設定します。
+
+```text
+LINE_CHANNEL_SECRET
+LINE_CHANNEL_ACCESS_TOKEN
+```
+
+Webhook URL:
+
+```text
+https://YOUR-RENDER-DOMAIN.onrender.com/callback
+```
+
+Webhook利用をONにしてください。
+
+過去にChannel Access Tokenをチャットや公開コードへ貼った場合は再発行し、RenderとGASの両方を更新してください。
+
+---
+
+# 5. Render Web Service
+
+推奨設定:
+
+```text
+Runtime: Python
+Build Command: pip install -r requirements.txt
+Start Command: gunicorn app:app
+```
+
+GitHub `main` への更新で自動デプロイする設定が便利です。
+
+---
+
+# 6. Google Apps Script
+
+GitHub側の最新コードをApps Scriptへ手動コピーします。
+
+```text
+gas/Code.gs
+gas/FinanceReports.gs
+gas/DailyMemo.gs
+```
+
+GitHub更新は通常のスタンドアロンApps Scriptへ自動同期されません。`clasp` 等を使っていない場合は、変更後にコピーしてください。
+
+Script Properties:
 
 ```text
 LINE_USER_ID
@@ -359,21 +231,17 @@ RENDER_BASE_URL
 SCHEDULER_SECRET
 ```
 
-`RENDER_BASE_URL` の例:
+`RENDER_BASE_URL` 例:
 
 ```text
 https://line-notion-bot.onrender.com
 ```
 
-末尾 `/` はあってもコード側で除去します。
-
-`SCHEDULER_SECRET` は Render と同じ値にします。
-
 ---
 
-# 10. カード通知・未処理キューの仕組み
+# 7. カード通常監視
 
-通常監視:
+GAS関数:
 
 ```text
 checkCardEmails
@@ -385,57 +253,23 @@ checkCardEmails
 1時間ごと
 ```
 
-実処理対象:
+実処理対象は直近2時間です。1時間ごとに2時間を見ることで、Apps Scriptの実行時刻が多少ずれても取りこぼしにくくしています。
+
+新しいカード利用を検知すると、まず未処理DBへ保存し、その後LINEへ即時Flex通知します。
+
+通知ボタン:
 
 ```text
-直近2時間
+ジャンルを選ぶ    → 緑
+店名を変更する    → 緑
+登録しない        → 色なし
 ```
 
-フロー:
+ジャンル選択肢も通常操作なので緑です。
 
-```text
-Gmailで新しいカードメール
-↓
-GASが本文からカード・利用先・金額・利用日を解析
-↓
-POST /api/card-pending
-↓
-カード未処理DBへ保存
-↓
-LINEへ即時Flex通知
-```
+---
 
-LINE通知では:
-
-- `ジャンルを選ぶ` → 緑
-- `店名を変更する` → 緑
-- `登録しない` → 色なし
-
-ジャンル選択肢はすべて緑です。
-
-### 1件保存した後
-
-家計簿への保存が成功した場合のみ、カード未処理DBの該当ページをアーカイブします。
-
-その後、未処理が残っていれば次のカードを自動表示します。
-
-```text
-1件目 保存
-↓
-1件目を未処理DBからアーカイブ
-↓
-2件目を自動表示
-↓
-2件目 保存
-↓
-...
-```
-
-### 登録しない場合
-
-`登録しない` を押すと家計簿へは保存せず、カード未処理DBの該当ページだけをアーカイブして次へ進みます。
-
-### 後からまとめて処理する
+# 8. カード未処理を連続処理
 
 LINEで:
 
@@ -443,13 +277,48 @@ LINEで:
 カード未処理
 ```
 
-と送るか、メニューの「カード未処理を確認」を押してください。
+と送るか、メニューの `カード未処理を確認` を押します。
 
-現在の件数と最も古い未処理カードを表示します。
+未処理件数と最も古い1件を表示します。
+
+ジャンルを保存すると:
+
+```text
+家計簿DBへ保存
+↓
+保存成功を確認
+↓
+その未処理ページをアーカイブ
+↓
+次の未処理カードを自動表示
+```
+
+となります。
+
+`登録しない` の場合は家計簿へ保存せず、その未処理ページをアーカイブして次へ進みます。
 
 ---
 
-# 11. カード未処理の日次リマインダー
+# 9. 古いLINE通知からの二重登録防止
+
+新キュー方式のカード通知には `pending_id` が埋め込まれています。
+
+一度ジャンル保存またはスキップして未処理ページがアーカイブされた後、LINEの古いカード通知をもう一度押しても、`app.py` が pending_id の有効性を確認します。
+
+処理済みなら家計簿保存を実行せず、次のように案内します。
+
+```text
+このカード利用はすでに処理済みです。
+古い通知からの二重登録は行いませんでした。
+```
+
+未処理が残っていれば次のカードを表示します。
+
+注意: この保護は `pending_id` を持つ新方式の通知が対象です。キュー導入前の古い通知や、別経路で手動登録済みの過去支出との完全照合は別機能です。
+
+---
+
+# 10. 未処理件数の日次通知
 
 `gas/FinanceReports.gs` の:
 
@@ -459,7 +328,7 @@ sendDailyCardPendingReminder
 
 に1日1回の時間主導トリガーを設定します。
 
-おすすめ:
+例:
 
 ```text
 毎日 20時〜21時ごろ
@@ -471,149 +340,105 @@ Render API:
 POST /api/card-pending-reminder
 ```
 
-未処理0件なら通知なし。
-
-未処理があるときだけ:
-
-```text
-ジャンル未選択のカード利用が 5 件あります
-```
-
-のように通知します。
+未処理が0件なら通知しません。1件以上なら件数だけLINEへ通知します。
 
 ---
 
-# 12. 2026年9月をまとめて取り込む
+# 11. 2026年9月のカード履歴をまとめて取り込む
 
-GitHubの最新 `gas/Code.gs` をApps Scriptへコピーした後、GASエディタで次の関数を手動実行します。
+最新 `gas/Code.gs` をApps Scriptへコピー後、GASエディタで次を手動実行します。
 
 ```text
 backfillSeptember2026
 ```
 
-この関数は:
-
-1. 2026年9月前後のカードメールを広めに検索
-2. 本文から実利用日を抽出
-3. 実利用日が `2026-09` のものだけ採用
-4. カード未処理DBへ追加
-5. 過去分1件ごとのLINE通知は送らない
-6. 最後に新規追加件数だけLINE通知
-
-という処理を行います。
-
-その後:
+内部では:
 
 ```text
-カード未処理
+backfillCardEmailsForMonth(2026, 9)
 ```
 
-と送れば古い利用から順番にジャンルを付けられます。
+を実行します。
 
-## 2026年9月10日時点で実行する場合
-
-今日は 2026年9月10日なので、9月11日〜30日のメールはまだ存在しません。
-
-したがって今実行すると、主に:
+処理内容:
 
 ```text
-2026-09-01 〜 2026-09-10
+9月前後のカードメールを広めに検索
+↓
+本文から実利用日を解析
+↓
+利用日が2026-09のものだけ採用
+↓
+カード未処理DBへ一括追加
+↓
+個別のLINE通知は送らない
+↓
+最後に新規追加件数だけ通知
 ```
 
-までに利用・受信できているものが取り込まれます。
+その後 `カード未処理` から古い順にジャンルを付けてください。
 
-9月を丸ごと完成させるには、9月30日以降にも再実行してください。
+### 2026年9月10日時点で実行する場合
 
-楽天カードなど利用からメール到着まで遅延するケースを考えると、10月上旬にもう一度実行するのが安全です。
+9月11日〜30日の利用メールはまだ存在しないため、今日実行しても9月全体は完成しません。現時点で取得できる9月分を先に取り込み、9月30日以降に再実行してください。
 
-バックフィル済み Gmail Message ID は別の Script Property に保持するため、同じバックフィル関数を再実行したときの重複を抑えます。
+楽天カードなど利用から通知まで遅れるケースもあるため、10月上旬にも再実行すると安全です。
 
-## 既に家計簿へ登録済みの9月支出がある場合
+バックフィル済みGmail Message IDを別のScript Propertyに保持するため、同じメールの再バックフィルを抑止します。
 
-現時点のバックフィルは Gmail Message ID 単位の再取り込み重複は抑えますが、**過去に別経路で既に家計簿へ登録済みの支出との完全照合までは行いません**。
+### 既に手動登録済みの支出
 
-すでに手動保存済みのカード支出が未処理へ出てきた場合は、もう一度保存せず `登録しない` でキューから外してください。
+現在のバックフィルはGmail Message ID単位の重複を抑止しますが、家計簿DBに別経路で既に登録済みの支出との完全照合はまだ行いません。
+
+同じ支出が未処理に出てきた場合は `登録しない` を選んでください。今後、自動照合を追加できます。
 
 ---
 
-# 13. 任意の月をバックフィルする
+# 12. AI検索
 
-汎用関数:
+AIは次の形式だけ起動します。
 
-```javascript
-backfillCardEmailsForMonth(year, month)
+```text
+AI 質問内容
 ```
 
-があります。
-
-2026年8月なら、Apps Script に一時的に:
-
-```javascript
-function backfillAugust2026() {
-  return backfillCardEmailsForMonth(2026, 8);
-}
-```
-
-のようなラッパーを作って実行できます。
-
-2026年9月は既に `backfillSeptember2026()` が用意されています。
-
----
-
-# 14. AI検索の仕組み
-
-現在は:
+処理:
 
 ```text
 PythonでDB選択
 ↓
-必要な最大2DBだけNotion取得
+最大2DBだけNotion取得
 ↓
 AI改善ログから類似例をPythonで検索
 ↓
-Geminiで回答
+Gemini最終回答 1回
 ↓
-LINE向けプレーンテキストへ整形
+LINE向けプレーンテキスト整形
 ```
 
-原則:
+原則 `1 AI質問 = Gemini 1回` です。
+
+60秒タイムアウトは維持します。
 
 ```text
-1 AI質問 = Gemini 1回
+worker.join(timeout=60)
 ```
 
-DBルーターはDB用途、DBタイトル、プロパティ名、プロパティ型、質問文、日付表現を利用します。
-
-DBスキーマは約10分キャッシュされます。
+GeminiにはMarkdown禁止を指示し、返答後も `sanitize_for_line()` で `**`、`##`、コードフェンスなどを除去します。
 
 ---
 
-# 15. LINE向けAI回答の整形
+# 13. AI改善
 
-Geminiが Markdown を返してもLINEで `**` や `##` が残らないよう二重対策しています。
-
-1. GeminiへのプロンプトでMarkdown禁止
-2. `sanitize_for_line()` で送信前にMarkdown記号を除去
-
-見出しは `【見出し】`、箇条書きは `・` を使う方針です。
-
----
-
-# 16. AI改善機能
-
-```text
-AI 今月の食費について分析して
-```
-
-回答が期待と違った場合:
+AI回答後に:
 
 ```text
 AI改善
 ```
 
-Bot が「本当はどのように答えてほしかったですか？」と聞くので、期待内容を自然文で送ります。
+と送ると、本当はどう答えてほしかったかを尋ねます。
 
-AI改善ログDBへ:
+回答はAI改善ログDBへ次の4項目で保存します。
 
 ```text
 質問
@@ -622,63 +447,28 @@ AI回答
 登録日時
 ```
 
-を保存します。
-
-次回はPythonで類似する改善例を最大3件選び、Geminiの最終回答へ参考例として追加します。改善ログ検索自体にはGeminiを使いません。
+今後の似た質問ではPythonで関連例を最大3件選び、Geminiへ参考情報として渡します。改善例検索自体にはGeminiを使いません。
 
 ---
 
-# 17. AIタイムアウト
+# 14. UIの色ルール
 
-`app.py` はAI処理を別スレッドで実行し、最大60秒待ちます。
+順番ではなく操作の意味で決めます。
 
 ```text
-worker.join(timeout=60)
+通常の操作・選択・次へ → primary / 緑
+キャンセル               → secondary / 色なし
+登録しない               → secondary / 色なし
+削除                     → secondary / 控えめ
 ```
 
-現在は60秒を維持します。
+メインメニューの通常機能、ジャンル選択、支払方法選択、店名変更などは緑です。
+
+「先頭1個だけ」「最初の2個だけ」緑というルールはありません。
 
 ---
 
-# 18. Flex Message UI の色ルール
-
-現在は「何番目のボタンか」ではなく「操作の意味」で色を決めます。
-
-通常の前向きな操作:
-
-```text
-primary = 緑
-```
-
-対象例:
-
-- メインメニューの通常機能
-- ジャンル選択
-- 支払方法選択
-- 店名変更
-- AI検索の使い方
-- Notionを開く
-
-ネガティブ / 低頻度操作:
-
-```text
-secondary = 色なし
-```
-
-対象例:
-
-- キャンセル
-- 登録しない
-- 削除する
-- メモ削除
-
-「先頭1個だけ」「最初の2個だけ」緑にするロジックは使いません。
-
----
-
-# 19. その他の定期トリガー
-
-おすすめ例:
+# 15. 推奨トリガー
 
 ```text
 checkCardEmails
@@ -699,9 +489,9 @@ sendWeeklyFinanceReport
 
 ---
 
-# 20. 動作確認
+# 16. 動作確認
 
-RenderデプロイとGAS更新後、LINEで順番に確認してください。
+Render再デプロイとGAS更新後、次を確認します。
 
 ```text
 メニュー
@@ -714,39 +504,39 @@ RenderデプロイとGAS更新後、LINEで順番に確認してください。
 AI
 ```
 
-手動支出:
+カードキューのテストでは、新しいカード通知について以下を確認します。
 
 ```text
-支出 500 コンビニ
+LINEへ即時通知
+↓
+カード未処理DBに存在
+↓
+ジャンル保存
+↓
+家計簿DBに追加
+↓
+カード未処理DBから消える
+↓
+次の未処理があれば自動表示
 ```
 
-ジャンル・支払方法が緑、キャンセルだけ色なしならUIは正常です。
-
-カード通知が新しく来た場合は:
-
-1. LINEに即時カード通知が来る
-2. `カード未処理` DB に1件存在する
-3. ジャンルを保存する
-4. 家計簿DBへ支出が追加される
-5. カード未処理DBから該当項目が消える
-6. 他の未処理があれば次が自動表示される
-
-ことを確認してください。
+さらに処理済みの古いLINE通知をもう一度押し、家計簿へ重複登録されないことも確認してください。
 
 ---
 
-# 21. カード未処理DBへ保存できない場合
+# 17. トラブルシューティング
 
-確認項目:
+カード未処理DBへ保存できない場合:
 
-1. Render に `NOTION_CARD_PENDING_DATABASE_ID` があるか
-2. Database ID が正しいか
-3. Notion Integration がカード未処理DBに接続されているか
-4. DBプロパティ名が完全一致しているか
-5. `SCHEDULER_SECRET` がGASとRenderで一致しているか
-6. `RENDER_BASE_URL` が正しいか
+```text
+NOTION_CARD_PENDING_DATABASE_ID がRenderにあるか
+Notion IntegrationがDBに接続されているか
+プロパティ名・型が完全一致しているか
+SCHEDULER_SECRETがGASとRenderで一致しているか
+RENDER_BASE_URLが正しいか
+```
 
-必要なプロパティ:
+必要な未処理DBプロパティ:
 
 ```text
 GmailMessageID  Title
@@ -758,11 +548,13 @@ GmailMessageID  Title
 登録日時         Date
 ```
 
+Renderが401を返す場合は `SCHEDULER_SECRET` の不一致を確認してください。
+
 ---
 
-# 22. セキュリティ
+# 18. セキュリティ
 
-GitHubに以下を直接書かないでください。
+GitHubへ次を直接書かないでください。
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
@@ -776,36 +568,13 @@ Render Environment または GAS Script Properties で管理します。
 
 ---
 
-# 23. GASコード更新時の注意
+# 19. 今後の改善候補
 
-GitHub の `gas/*.gs` を更新しても、通常はApps Scriptプロジェクトへ自動同期されません。
-
-今回の変更後は最低でも次をApps Script側へ最新版でコピーしてください。
-
-```text
-gas/Code.gs
-gas/FinanceReports.gs
-```
-
-日次メモも利用する場合:
-
-```text
-gas/DailyMemo.gs
-```
-
-も保持してください。
-
----
-
-# 24. 今後の改善候補
-
-- 過去カードバックフィル時の家計簿DB完全重複チェック
-- AI直前回答の永続化
-- AI改善ログの評価機能
-- 改善ログが数千件になった場合のEmbedding / ベクトル検索
-- 予算アラートの重複通知防止
+- バックフィル時に家計簿DBまで照合する完全な重複防止
 - 固定費二重登録防止
-- Scheduler API認証統一
-- `user_states` の永続化
+- 予算アラートの段階別一度だけ通知
+- `/api/register-fixed` / `/api/monthly-notice` の認証統一
+- AI直前回答と `user_states` の永続化
+- AI改善ログが大量になった場合のベクトル検索
 
-機能変更時は README.md と SETUP.md も同時に更新する方針です。
+README.md と SETUP.md は機能変更と同時に更新する方針です。
