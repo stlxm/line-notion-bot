@@ -6,6 +6,7 @@ NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_CARD_PENDING_DATABASE_ID = os.environ.get("NOTION_CARD_PENDING_DATABASE_ID", "")
 
 JST = timezone(timedelta(hours=9), "JST")
+_title_property_cache = None
 
 
 def _headers():
@@ -14,6 +15,40 @@ def _headers():
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json",
     }
+
+
+def _get_title_property_name():
+    """未処理DBのTitleプロパティ名を自動検出します。
+
+    推奨名は GmailMessageID ですが、Notion作成直後の「名前」などでも動作します。
+    """
+    global _title_property_cache
+    if _title_property_cache:
+        return _title_property_cache
+    if not NOTION_CARD_PENDING_DATABASE_ID:
+        return None
+
+    res = requests.get(
+        f"https://api.notion.com/v1/databases/{NOTION_CARD_PENDING_DATABASE_ID}",
+        headers=_headers(),
+        timeout=10,
+    )
+    if res.status_code != 200:
+        print(f"カード未処理DBスキーマ取得エラー ({res.status_code}): {res.text}")
+        return None
+
+    props = res.json().get("properties", {})
+    if props.get("GmailMessageID", {}).get("type") == "title":
+        _title_property_cache = "GmailMessageID"
+        return _title_property_cache
+
+    for name, prop in props.items():
+        if prop.get("type") == "title":
+            _title_property_cache = name
+            print(f"[Card Queue] Titleプロパティを自動検出: {name}")
+            return _title_property_cache
+
+    return None
 
 
 def _query(payload):
@@ -47,9 +82,10 @@ def _title_value(prop):
 def _page_to_item(page):
     props = page.get("properties", {})
     date_obj = props.get("利用日", {}).get("date") or {}
+    title_name = _get_title_property_name() or "GmailMessageID"
     return {
         "id": page.get("id"),
-        "message_id": _title_value(props.get("GmailMessageID", {})),
+        "message_id": _title_value(props.get(title_name, {})),
         "card": _rich_text_value(props.get("カード", {})),
         "store": _rich_text_value(props.get("利用先", {})),
         "amount": props.get("金額", {}).get("number") or 0,
@@ -63,9 +99,13 @@ def enqueue_card(message_id, card, store, amount, date_str):
     if not NOTION_CARD_PENDING_DATABASE_ID:
         return {"ok": False, "error": "NOTION_CARD_PENDING_DATABASE_ID is not configured"}
 
+    title_name = _get_title_property_name()
+    if not title_name:
+        return {"ok": False, "error": "カード未処理DBにTitleプロパティがありません"}
+
     existing = _query({
         "page_size": 1,
-        "filter": {"property": "GmailMessageID", "title": {"equals": str(message_id)}},
+        "filter": {"property": title_name, "title": {"equals": str(message_id)}},
     })
     if existing:
         item = _page_to_item(existing[0])
@@ -74,7 +114,7 @@ def enqueue_card(message_id, card, store, amount, date_str):
     payload = {
         "parent": {"database_id": NOTION_CARD_PENDING_DATABASE_ID},
         "properties": {
-            "GmailMessageID": {"title": [{"text": {"content": str(message_id)}}]},
+            title_name: {"title": [{"text": {"content": str(message_id)}}]},
             "カード": {"rich_text": [{"text": {"content": str(card)}}]},
             "利用先": {"rich_text": [{"text": {"content": str(store)}}]},
             "金額": {"number": float(amount)},
