@@ -2,6 +2,7 @@ import os
 import re
 import json
 import threading
+import uuid
 from urllib.parse import parse_qsl
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, abort
@@ -146,7 +147,6 @@ def api_card_pending():
     if missing:
         return json.dumps({"status": "error", "message": f"missing: {','.join(missing)}"}), 400
 
-    # 速報/確定など別Message IDでも、すでに家計簿に同一取引があれば再キューしない。
     ledger_dup = ledger_guard.find_duplicate(
         data["card"], data["store"], data["amount"], data["date"]
     )
@@ -172,7 +172,6 @@ def api_card_pending():
             "ignored_fixed": True, "pending_count": card_queue.get_pending_count(),
         }, ensure_ascii=False), 200
 
-    # ユーザーが明示ONにした十分学習済みルールだけ自動登録する。
     auto = card_phase1.try_auto_register(item.get("id"))
     if auto.get("status") == "saved":
         if ADMIN_USER_ID:
@@ -186,12 +185,6 @@ def api_card_pending():
             "status": "success", "created": result.get("created", False),
             "pending_id": item.get("id"), "notified": True,
             "auto_registered": True, "pending_count": card_queue.get_pending_count(),
-        }, ensure_ascii=False), 200
-    if auto.get("status") == "reconciled":
-        return json.dumps({
-            "status": "success", "created": False,
-            "pending_id": item.get("id"), "notified": True,
-            "reconciled_ledger": True, "pending_count": card_queue.get_pending_count(),
         }, ensure_ascii=False), 200
 
     return json.dumps({
@@ -235,7 +228,6 @@ def api_card_pending_reminder():
 
 @app.route("/api/card-month-end-check", methods=["POST"])
 def api_card_month_end_check():
-    """月末だけ未処理ゼロ確認を通知。GASから毎日呼んでも月末以外は何もしない。"""
     if not _scheduler_authorized():
         return json.dumps({"status": "error", "message": "Unauthorized"}), 401
     if not ADMIN_USER_ID:
@@ -579,6 +571,32 @@ def handle_message(event):
         reply_line(reply_token, [menu.create_main_menu_flex()])
         return
 
+    if user_message == "カードテスト":
+        if ADMIN_USER_ID and user_id != ADMIN_USER_ID:
+            reply_line(reply_token, "カードテストは管理者のみ利用できます。")
+            return
+        now = datetime.now(JST)
+        amount = 100 + (now.microsecond % 900)
+        result = card_queue.enqueue_card(
+            f"phase1-test-{uuid.uuid4()}",
+            "JCB",
+            "Phase1テストショップ",
+            amount,
+            now.strftime("%Y-%m-%d"),
+        )
+        if not result.get("ok"):
+            reply_line(reply_token, f"⚠️ テスト用カードを作成できませんでした。\n{result.get('error', 'unknown error')}")
+            return
+        if result.get("ignored_fixed"):
+            reply_line(reply_token, "⚠️ Phase1テストショップが固定費/サブスク除外対象になっています。固定費DBの該当レコードを無効化してから再試行してください。")
+            return
+        item = result.get("item") or {}
+        reply_line(reply_token, [
+            TextMessage(text="🧪 Phase 1テスト用の未処理カードを1件作成しました。これは実際のカード利用ではありません。"),
+            _card_category_flex(item.get("card"), item.get("store"), item.get("amount"), item.get("date"), item.get("id")),
+        ])
+        return
+
     if user_message in ["AI改善", "AIフィードバック", "AI修正"]:
         last = ai_feedback.get_last_ai_interaction(user_id)
         if not last:
@@ -591,7 +609,7 @@ def handle_message(event):
     if user_message in ["カード未処理", "カード保留", "カード未分類"]:
         count = card_queue.get_pending_count()
         if count <= 0:
-            reply_line(reply_token, "✅ ジャンル未選択のカード利用はありません。")
+            reply_line(reply_token, "✅ ジャンル未選択のカード利用はありません。\nテストしたい場合は「カードテスト」と送るとテスト用未処理を1件作れます。")
         else:
             item = card_queue.get_next_pending()
             reply_line(reply_token, [TextMessage(text=f"💳 ジャンル未選択が {count} 件あります。古いものから処理します。"), _card_category_flex(item["card"], item["store"], item["amount"], item["date"], item["id"])])
@@ -835,7 +853,7 @@ def handle_message(event):
     if user_message in ["ヘルプ", "help", "Help", "使い方"]:
         help_text = (
             "【Notionアシスタント】\n\n◆ 家計簿\n・今月\n・週次レポート\n・予算アラート\n・支出 1200 ラーメン\n"
-            "・カード未処理\n・カード自動登録\n・予算一覧\n・固定費一覧\n\n"
+            "・カード未処理\n・カードテスト\n・カード自動登録\n・予算一覧\n・固定費一覧\n\n"
             "◆ メモ\n・メモ 卵を買う\n・メモ一覧\n・メモ削除\n\n"
             "◆ AI\n・AI 質問内容\n・AI改善"
         )
