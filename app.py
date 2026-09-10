@@ -19,6 +19,8 @@ import notion_helper
 import memo
 import menu
 import budget
+import insights
+import ui
 
 app = Flask(__name__)
 
@@ -33,6 +35,7 @@ SCHEDULER_SECRET = os.environ.get("SCHEDULER_SECRET", "")
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 user_states = {}
+JST = timezone(timedelta(hours=9), "JST")
 
 
 @app.route("/", methods=["GET", "HEAD"])
@@ -51,6 +54,12 @@ def callback():
     return "OK"
 
 
+def _scheduler_authorized():
+    if not SCHEDULER_SECRET:
+        return False
+    return request.headers.get("X-API-KEY", "") == SCHEDULER_SECRET
+
+
 @app.route("/api/register-fixed", methods=["POST"])
 def api_register_fixed():
     count, total = kakeibo.register_monthly_fixed_expenses()
@@ -62,12 +71,6 @@ def api_monthly_notice():
     if ADMIN_USER_ID:
         push_line(ADMIN_USER_ID, kakeibo.create_monthly_budget_prompt_flex())
     return json.dumps({"status": "success", "message": "Monthly notice triggered"}), 200
-
-
-def _scheduler_authorized():
-    if not SCHEDULER_SECRET:
-        return False
-    return request.headers.get("X-API-KEY", "") == SCHEDULER_SECRET
 
 
 @app.route("/api/daily-memo", methods=["POST"])
@@ -92,6 +95,38 @@ def api_daily_memo():
     try:
         push_line(ADMIN_USER_ID, message)
         return json.dumps({"status": "success", "count": len(memos)}), 200
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/budget-alert", methods=["POST"])
+def api_budget_alert():
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+    if not ADMIN_USER_ID:
+        return json.dumps({"status": "error", "message": "ADMIN_USER_ID is not configured"}), 500
+
+    alerts = insights.get_budget_alerts()
+    if not alerts:
+        return json.dumps({"status": "success", "sent": False, "alerts": 0}), 200
+
+    try:
+        push_line(ADMIN_USER_ID, insights.create_budget_alert_flex())
+        return json.dumps({"status": "success", "sent": True, "alerts": len(alerts)}), 200
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/weekly-report", methods=["POST"])
+def api_weekly_report():
+    if not _scheduler_authorized():
+        return json.dumps({"status": "error", "message": "Unauthorized"}), 401
+    if not ADMIN_USER_ID:
+        return json.dumps({"status": "error", "message": "ADMIN_USER_ID is not configured"}), 500
+
+    try:
+        push_line(ADMIN_USER_ID, insights.create_weekly_report_flex())
+        return json.dumps({"status": "success", "sent": True}), 200
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}), 500
 
@@ -126,7 +161,6 @@ def start_db_selection(user_id, reply_token):
 
     display_names = [notion_helper.get_database_title(db_id) for db_id in db_list]
     user_states[user_id] = {"step": "SELECT_DB", "db_list": db_list}
-
     lines = ["追加するデータベースを番号で選んでください。"]
     for index, title in enumerate(display_names, start=1):
         lines.append(f"{index}. {title}")
@@ -145,22 +179,28 @@ def start_manual_kakeibo(user_id, reply_token, text):
         reply_line(reply_token, "金額は数値で入力してください。（例: 支出 1200 ラーメン）")
         return
 
-    store_name = parts[2] if len(parts) >= 3 else "未入力"
-    jst = timezone(timedelta(hours=9), "JST")
-    date_str = datetime.now(jst).strftime("%Y-%m-%d")
+    store_name = " ".join(parts[2:]) if len(parts) >= 3 else "未入力"
+    date_str = datetime.now(JST).strftime("%Y-%m-%d")
     user_states[user_id] = {
         "step": "MANUAL_KAKEIBO_GENRE",
         "amount": amount,
         "store": store_name,
-        "date": date_str
+        "date": date_str,
     }
 
     categories = kakeibo.get_notion_select_options(
         NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=kakeibo.EXCLUDED_GENRES
     ) or ["食費", "日用品", "交通費", "娯楽"]
-    reply_line(reply_token, [kakeibo.create_button_grid_flex(
+    reply_line(reply_token, [ui.create_choice_flex(
         "ジャンルを選択してください", categories, "manual_cat_select", include_cancel=True
     )])
+
+
+def _card_category_flex(card, store, amount, date_str):
+    categories = kakeibo.get_notion_select_options(
+        NOTION_KAKEIBO_DATABASE_ID, "ジャンル", exclude_list=kakeibo.EXCLUDED_GENRES
+    ) or ["食費", "日用品", "交通費", "娯楽"]
+    return ui.create_card_category_flex(card, store, amount, date_str, categories)
 
 
 @handler.add(PostbackEvent)
@@ -170,7 +210,7 @@ def handle_postback(event):
     action = params.get("action")
 
     if action == "quick_input_kakeibo":
-        reply_line(event.reply_token, "支出を入力します。\n【送信例】\n・支出 1200 ラーメン\n・支出 500")
+        reply_line(event.reply_token, "支出を入力します。\n【送信例】\n・支出 1200 ラーメン\n・支出 500 コンビニ")
         return
 
     if action == "quick_input_memo":
@@ -188,10 +228,10 @@ def handle_postback(event):
         return
 
     if action == "card_select_cat":
-        flex_msg = kakeibo.create_card_notify_flex(
-            params.get("card"), params.get("store"), params.get("amount"), params.get("date")
-        )
-        reply_line(event.reply_token, [TextMessage(text="ジャンル選択へ進みます。"), flex_msg])
+        reply_line(event.reply_token, [
+            TextMessage(text="ジャンル選択へ進みます。"),
+            _card_category_flex(params.get("card"), params.get("store"), params.get("amount"), params.get("date")),
+        ])
         return
 
     if action == "card_change_store_start":
@@ -200,7 +240,7 @@ def handle_postback(event):
             "card": params.get("card"),
             "old_store": params.get("store"),
             "amount": params.get("amount"),
-            "date": params.get("date")
+            "date": params.get("date"),
         }
         reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n（現在の仮名称: {params.get('store')}）")
         return
@@ -218,10 +258,7 @@ def handle_postback(event):
         page_id = params.get("id")
         title = params.get("title", "メモ")
         success = memo.delete_memo_from_notion(page_id)
-        if success:
-            reply_line(event.reply_token, f"🗑️ メモ「{title}」を削除しました。")
-        else:
-            reply_line(event.reply_token, "メモの削除に失敗しました。")
+        reply_line(event.reply_token, f"🗑️ メモ「{title}」を削除しました。" if success else "メモの削除に失敗しました。")
         return
 
     if action == "kakeibo_save":
@@ -229,10 +266,14 @@ def handle_postback(event):
             params.get("card"), params.get("store"), params.get("amount"),
             params.get("date"), params.get("cat")
         )
-        reply_line(event.reply_token, [
-            TextMessage(text=f"📌「{params.get('cat')}」を選択しました。保存中..."),
-            TextMessage(text=res_msg)
-        ])
+        messages = [
+            TextMessage(text=f"📌「{params.get('cat')}」を選択しました。"),
+            TextMessage(text=res_msg),
+        ]
+        alerts = insights.get_budget_alerts()
+        if alerts:
+            messages.append(insights.create_budget_alert_flex())
+        reply_line(event.reply_token, messages)
         return
 
     if action == "manual_cat_select" and user_id in user_states:
@@ -244,7 +285,7 @@ def handle_postback(event):
         ) or ["現金", "JCB", "三井住友カード", "PayPay", "楽天カード"]
         reply_line(event.reply_token, [
             TextMessage(text=f"📌「{selected_cat}」を選択しました。"),
-            kakeibo.create_button_grid_flex("支払方法を選択してください", cards, "manual_card_select", include_cancel=True)
+            ui.create_choice_flex("支払方法を選択してください", cards, "manual_card_select", include_cancel=True),
         ])
         return
 
@@ -256,10 +297,14 @@ def handle_postback(event):
             state_data["date"], state_data["category"]
         )
         del user_states[user_id]
-        reply_line(event.reply_token, [
-            TextMessage(text=f"💳「{selected_card}」を選択しました。保存中..."),
-            TextMessage(text=res_msg)
-        ])
+        messages = [
+            TextMessage(text=f"💳「{selected_card}」を選択しました。"),
+            TextMessage(text=res_msg),
+        ]
+        alerts = insights.get_budget_alerts()
+        if alerts:
+            messages.append(insights.create_budget_alert_flex())
+        reply_line(event.reply_token, messages)
         return
 
 
@@ -273,6 +318,30 @@ def handle_message(event):
         reply_line(reply_token, [menu.create_main_menu_flex()])
         return
 
+    if user_message in ["今月", "ダッシュボード", "家計簿ダッシュボード", "今月の家計簿"]:
+        try:
+            reply_line(reply_token, [insights.create_dashboard_flex()])
+        except Exception as e:
+            print(f"ダッシュボードエラー: {e}")
+            reply_line(reply_token, "家計簿ダッシュボードの取得に失敗しました。Notion設定を確認してください。")
+        return
+
+    if user_message in ["予算アラート", "予算警告", "アラート"]:
+        try:
+            reply_line(reply_token, [insights.create_budget_alert_flex()])
+        except Exception as e:
+            print(f"予算アラートエラー: {e}")
+            reply_line(reply_token, "予算アラートの取得に失敗しました。")
+        return
+
+    if user_message in ["週次レポート", "週間レポート", "今週"]:
+        try:
+            reply_line(reply_token, [insights.create_weekly_report_flex()])
+        except Exception as e:
+            print(f"週次レポートエラー: {e}")
+            reply_line(reply_token, "週次レポートの取得に失敗しました。")
+        return
+
     if user_message.startswith("CARD_NOTIFY|"):
         parts = user_message.split("|")
         if len(parts) >= 5:
@@ -284,7 +353,7 @@ def handle_message(event):
         if user_id in user_states:
             state_data = user_states[user_id]
             if state_data.get("step") == "WAITING_STORE_NAME_CHANGE":
-                flex_msg = kakeibo.create_card_notify_flex(
+                flex_msg = _card_category_flex(
                     state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"]
                 )
                 store = state_data["old_store"]
@@ -299,7 +368,7 @@ def handle_message(event):
 
     if user_id in user_states and user_states[user_id].get("step") == "WAITING_STORE_NAME_CHANGE":
         state_data = user_states.pop(user_id)
-        flex_msg = kakeibo.create_card_notify_flex(
+        flex_msg = _card_category_flex(
             state_data["card"], user_message, state_data["amount"], state_data["date"]
         )
         reply_line(reply_token, [TextMessage(text=f"店名を「{user_message}」に変更しました。"), flex_msg])
@@ -308,8 +377,7 @@ def handle_message(event):
     if user_id in user_states and user_states[user_id].get("step") == "WAITING_MONTHLY_BUDGET":
         if user_message.isdigit():
             budget_amount = int(user_message)
-            jst = timezone(timedelta(hours=9), "JST")
-            target_month = datetime.now(jst).strftime("%Y-%m")
+            target_month = datetime.now(JST).strftime("%Y-%m")
             success = kakeibo.set_budget_in_notion(target_month, budget_amount, category=None)
             del user_states[user_id]
             if success:
@@ -359,8 +427,7 @@ def handle_message(event):
 
     if user_message.startswith("予算"):
         parts = user_message.replace("　", " ").split()
-        jst = timezone(timedelta(hours=9), "JST")
-        target_month = datetime.now(jst).strftime("%Y-%m")
+        target_month = datetime.now(JST).strftime("%Y-%m")
         category = None
         budget_val = None
         if len(parts) == 2 and parts[1].isdigit():
@@ -412,7 +479,7 @@ def handle_message(event):
 
     if user_message in ["固定費", "固定費登録", "固定費 登録", "固定費　登録"]:
         count, total = kakeibo.register_monthly_fixed_expenses()
-        today_month = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m")
+        today_month = datetime.now(JST).strftime("%Y-%m")
         if count > 0:
             reply_text = f"今月分（{today_month}）の固定費・サブスクを一括登録しました！\n・件数: {count} 件\n・合計: ¥{total:,}"
         else:
@@ -442,6 +509,7 @@ def handle_message(event):
     if user_id in user_states:
         state_data = user_states[user_id]
         step = state_data.get("step")
+
         if step == "SELECT_DB":
             if user_message.isdigit():
                 idx = int(user_message) - 1
@@ -458,7 +526,7 @@ def handle_message(event):
                         "properties": props,
                         "current_prop_index": 0,
                         "collected_data": {},
-                        "step": "INPUT_PROPERTY"
+                        "step": "INPUT_PROPERTY",
                     })
                     reply_line(reply_token, f"{props[0][0]} は何ですか？")
                     return
@@ -486,8 +554,7 @@ def handle_message(event):
         if step == "CONFIRM":
             if user_message == "はい":
                 success = notion_helper.create_notion_page(
-                    state_data["selected_db_id"],
-                    state_data["collected_data"],
+                    state_data["selected_db_id"], state_data["collected_data"],
                     {p[0]: p[1] for p in state_data["properties"]}
                 )
                 del user_states[user_id]
@@ -514,12 +581,24 @@ def handle_message(event):
     if user_message in ["ヘルプ", "help", "Help", "使い方"]:
         help_text = (
             "【Notionアシスタントの使い方】\n\n"
-            "◆ メニュー\nメニュー と送信すると全機能を1画面で確認できます。\n\n"
-            "◆ 家計簿\n・支出入力: 支出 1200 ラーメン\n・予算一覧: 予算一覧\n"
-            "・全体予算: 予算 100000\n・ジャンル予算: 予算 食費 30000\n"
-            "・固定費一覧: 固定費一覧\n・固定費一括登録: 固定費\n\n"
-            "◆ メモ\n・追加: メモ 卵を買う\n・一覧: メモ一覧\n・削除: メモ削除（確認あり）\n\n"
-            "◆ Notion\n・データ追加: データ追加\n・URL保存: URLをそのまま送信\n・Notionリンク: Notion\n\n"
+            "◆ 家計簿\n"
+            "・今月: 家計簿ダッシュボード\n"
+            "・週次レポート: 直近7日と前7日を比較\n"
+            "・予算アラート: 80% / 90% / 100%を確認\n"
+            "・支出入力: 支出 1200 ラーメン\n"
+            "・予算一覧: 予算一覧\n"
+            "・全体予算: 予算 100000\n"
+            "・ジャンル予算: 予算 食費 30000\n"
+            "・固定費一覧: 固定費一覧\n"
+            "・固定費一括登録: 固定費\n\n"
+            "◆ メモ\n"
+            "・追加: メモ 卵を買う\n"
+            "・一覧: メモ一覧\n"
+            "・削除: メモ削除（確認あり）\n\n"
+            "◆ Notion\n"
+            "・データ追加: データ追加\n"
+            "・URL保存: URLをそのまま送信\n"
+            "・Notionリンク: Notion\n\n"
             "◆ AI検索\n知りたい情報をそのまま質問してください。"
         )
         reply_line(reply_token, help_text)
