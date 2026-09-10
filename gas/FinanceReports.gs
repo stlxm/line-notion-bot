@@ -35,6 +35,11 @@ function sendDailyBudgetAlert() {
   callFinanceEndpoint_("/api/budget-alert");
 }
 
+// 1日1回のトリガーを推奨。カードのジャンル未選択が残っている時だけ件数を通知します。
+function sendDailyCardPendingReminder() {
+  callFinanceEndpoint_("/api/card-pending-reminder");
+}
+
 // 毎週日曜日など、週1回のトリガーを推奨。
 function sendWeeklyFinanceReport() {
   callFinanceEndpoint_("/api/weekly-report");
