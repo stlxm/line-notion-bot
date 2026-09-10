@@ -280,6 +280,18 @@ def _next_pending_messages(exclude_id=None):
     ]
 
 
+def _pending_is_active(pending_id):
+    if not pending_id:
+        return True
+    return card_queue.get_item(pending_id) is not None
+
+
+def _reply_already_processed(reply_token, pending_id=None):
+    messages = [TextMessage(text="このカード利用はすでに処理済みです。古い通知からの二重登録は行いませんでした。")]
+    messages.extend(_next_pending_messages(exclude_id=pending_id))
+    reply_line(reply_token, messages[:5])
+
+
 def _run_ai_search(user_id, reply_token, query):
     """明示的に AI 接頭辞が付いた質問だけ Gemini を呼び出します。"""
     reply_line(reply_token, "🤖 AIで検索・回答を生成しています。完了後にLINEへ送信します。")
@@ -333,6 +345,9 @@ def handle_postback(event):
 
     if action == "skip_card_pending":
         pending_id = params.get("pending_id")
+        if pending_id and not _pending_is_active(pending_id):
+            _reply_already_processed(event.reply_token, pending_id)
+            return
         if pending_id:
             card_queue.skip(pending_id)
         messages = [TextMessage(text="このカード利用は登録せず、未処理キューから削除しました。")]
@@ -346,22 +361,30 @@ def handle_postback(event):
         return
 
     if action == "card_select_cat":
+        pending_id = params.get("pending_id")
+        if pending_id and not _pending_is_active(pending_id):
+            _reply_already_processed(event.reply_token, pending_id)
+            return
         reply_line(event.reply_token, [
             TextMessage(text="ジャンル選択へ進みます。"),
             _card_category_flex(
-                params.get("card"), params.get("store"), params.get("amount"), params.get("date"), params.get("pending_id")
+                params.get("card"), params.get("store"), params.get("amount"), params.get("date"), pending_id
             ),
         ])
         return
 
     if action == "card_change_store_start":
+        pending_id = params.get("pending_id")
+        if pending_id and not _pending_is_active(pending_id):
+            _reply_already_processed(event.reply_token, pending_id)
+            return
         user_states[user_id] = {
             "step": "WAITING_STORE_NAME_CHANGE",
             "card": params.get("card"),
             "old_store": params.get("store"),
             "amount": params.get("amount"),
             "date": params.get("date"),
-            "pending_id": params.get("pending_id"),
+            "pending_id": pending_id,
         }
         reply_line(event.reply_token, f"✏️ 新しい利用先・店名を入力してください。\n（現在の仮名称: {params.get('store')}）")
         return
@@ -384,6 +407,10 @@ def handle_postback(event):
 
     if action == "kakeibo_save":
         pending_id = params.get("pending_id")
+        if pending_id and not _pending_is_active(pending_id):
+            _reply_already_processed(event.reply_token, pending_id)
+            return
+
         res_msg = kakeibo.save_kakeibo_to_notion(
             params.get("card"), params.get("store"), params.get("amount"),
             params.get("date"), params.get("cat")
@@ -535,8 +562,13 @@ def handle_message(event):
         if user_id in user_states:
             state_data = user_states[user_id]
             if state_data.get("step") == "WAITING_STORE_NAME_CHANGE":
+                pending_id = state_data.get("pending_id")
+                if pending_id and not _pending_is_active(pending_id):
+                    del user_states[user_id]
+                    _reply_already_processed(reply_token, pending_id)
+                    return
                 flex_msg = _card_category_flex(
-                    state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"], state_data.get("pending_id")
+                    state_data["card"], state_data["old_store"], state_data["amount"], state_data["date"], pending_id
                 )
                 store = state_data["old_store"]
                 del user_states[user_id]
@@ -551,6 +583,9 @@ def handle_message(event):
     if user_id in user_states and user_states[user_id].get("step") == "WAITING_STORE_NAME_CHANGE":
         state_data = user_states.pop(user_id)
         pending_id = state_data.get("pending_id")
+        if pending_id and not _pending_is_active(pending_id):
+            _reply_already_processed(reply_token, pending_id)
+            return
         if pending_id:
             card_queue.update_store(pending_id, user_message)
         flex_msg = _card_category_flex(
