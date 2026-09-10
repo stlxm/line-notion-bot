@@ -102,8 +102,10 @@ def get_matching_pending_items(card, store):
     ]
 
 
-def find_pending_transaction(card, store, amount, date_str):
-    """Message IDが違っても同日・同額・同カード・同一店なら既存未処理として照合する。"""
+def find_pending_transaction(card, store, amount, date_str, candidate_check=False):
+    """同一取引候補を探す。自動削除には使わず、明示的な確認用途だけ返す。"""
+    if not candidate_check:
+        return None
     target_store = card_rules.normalize_store_name(store)
     for item in get_matching_pending_items(card, store):
         if (
@@ -116,7 +118,11 @@ def find_pending_transaction(card, store, amount, date_str):
 
 
 def enqueue_card(message_id, card, store, amount, date_str):
-    """固定費除外・Message ID重複・取引内容照合を通して未処理へ保存する。"""
+    """固定費除外とGmail Message ID重複防止を通して未処理へ保存する。
+
+    別Message IDの同日同額利用は正当な複数利用の可能性があるため、
+    ここでは自動統合しない。保存時の重複確認フローで本人判断へ回す。
+    """
     if fixed_rules.is_card_detection_excluded(card, store):
         print(f"[Card Queue] 固定費/サブスクのため検出除外: {card} / {store}")
         return {
@@ -141,11 +147,6 @@ def enqueue_card(message_id, card, store, amount, date_str):
     })
     if existing:
         return {"ok": True, "created": False, "item": _page_to_item(existing[0]), "duplicate_message": True}
-
-    reconciled = find_pending_transaction(card, store, amount, date_str)
-    if reconciled:
-        print(f"[Card Queue] 別Message IDの同一取引を既存未処理へ照合: {card} / {store} / {amount} / {date_str}")
-        return {"ok": True, "created": False, "item": reconciled, "reconciled_pending": True}
 
     payload = {
         "parent": {"database_id": NOTION_CARD_PENDING_DATABASE_ID},
