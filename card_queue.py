@@ -2,6 +2,8 @@ import os
 import requests
 from datetime import datetime, timezone, timedelta
 
+import fixed_rules
+
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_CARD_PENDING_DATABASE_ID = os.environ.get("NOTION_CARD_PENDING_DATABASE_ID", "")
 
@@ -95,7 +97,28 @@ def _page_to_item(page):
 
 
 def enqueue_card(message_id, card, store, amount, date_str):
-    """Gmail Message IDで重複防止しながら未処理カードを保存します。"""
+    """Gmail Message IDで重複防止しながら未処理カードを保存します。
+
+    固定費DBに同じカード + 正規化店名の有効レコードがある場合は、
+    未処理キューへ追加せず、GASが再通知しないよう通知済み相当で返します。
+    """
+    if fixed_rules.is_card_detection_excluded(card, store):
+        print(f"[Card Queue] 固定費/サブスクのため検出除外: {card} / {store}")
+        return {
+            "ok": True,
+            "created": False,
+            "ignored_fixed": True,
+            "item": {
+                "id": f"fixed-excluded:{message_id}",
+                "message_id": str(message_id),
+                "card": str(card),
+                "store": str(store),
+                "amount": float(amount),
+                "date": str(date_str),
+                "notified": True,
+            },
+        }
+
     if not NOTION_CARD_PENDING_DATABASE_ID:
         return {"ok": False, "error": "NOTION_CARD_PENDING_DATABASE_ID is not configured"}
 
