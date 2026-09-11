@@ -40,17 +40,17 @@ def create_main_menu_flex():
 
     body += _section(
         "📊 家計簿・予算",
-        "記録、今月の状況、予算、定期レポート",
+        "記録、今月の状況、予算判断、月次レビュー",
         [
             _message_button("今月のダッシュボード", "今月"),
             _postback_button("支出を入力する", "action=quick_input_kakeibo"),
+            _message_button("今日使える額", "今日使える"),
+            _message_button("支出ペースを見る", "ペース"),
+            _message_button("予算提案を見る", "予算提案"),
+            _message_button("月次レビュー", "月次レビュー"),
             _message_button("予算一覧を見る", "予算一覧"),
-            _message_button("予算アラートを見る", "予算アラート"),
             _message_button("週次レポートを見る", "週次レポート"),
-            _message_button("予算を設定する", "予算設定"),
             _message_button("固定費一覧を見る", "固定費一覧"),
-            _message_button("固定費を一括登録", "固定費"),
-            _message_button("固定費を追加する", "固定費追加"),
         ],
         "#1DB446",
     )
@@ -78,9 +78,10 @@ def create_main_menu_flex():
 
     body += _section(
         "🤖 AI検索・改善",
-        "明示した質問だけGeminiを使用。変な回答は改善ログへ残せます",
+        "Lite / Flashを切替可能。明示した質問だけGeminiを使用",
         [
             _message_button("AI検索の使い方", "AI"),
+            _message_button("AIモデルを確認", "AI Model"),
             _message_button("直前のAI回答を改善", "AI改善"),
         ],
         "#F57C00",
@@ -88,8 +89,9 @@ def create_main_menu_flex():
 
     body += _section(
         "🗂 Notion・その他",
-        "汎用データ登録、Notion、ヘルプ",
+        "貯金目標、汎用データ登録、Notion、ヘルプ",
         [
+            _message_button("貯金目標を見る", "貯金目標"),
             _message_button("データを追加する", "データ追加"),
             _message_button("Notionを開く", "Notion"),
             _message_button("使い方を見る", "ヘルプ"),
