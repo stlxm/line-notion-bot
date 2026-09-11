@@ -1,7 +1,37 @@
+import os
 import re
 
 import ai_feedback
 import notion_helper
+
+LITE_MODEL = "gemini-3.5-flash-lite"
+FLASH_MODEL = "gemini-3.6-flash"
+
+# 通常は低コスト・低レイテンシのLiteを使う。
+# LINEで「AI Lite」「AI Flash」と送ると、Renderプロセス内で切り替えられる。
+_selected_model = os.environ.get("GEMINI_MODEL", LITE_MODEL).strip() or LITE_MODEL
+if _selected_model not in {LITE_MODEL, FLASH_MODEL}:
+    _selected_model = LITE_MODEL
+
+
+def get_selected_model():
+    return _selected_model
+
+
+def get_selected_model_label():
+    return "Lite" if get_selected_model() == LITE_MODEL else "Flash"
+
+
+def set_selected_model(mode):
+    global _selected_model
+    normalized = str(mode or "").strip().lower()
+    if normalized in {"lite", "l", "軽量", "ライト"}:
+        _selected_model = LITE_MODEL
+        return True, "Lite"
+    if normalized in {"flash", "f", "通常", "高性能"}:
+        _selected_model = FLASH_MODEL
+        return True, "Flash"
+    return False, get_selected_model_label()
 
 
 def sanitize_for_line(text):
@@ -48,8 +78,24 @@ def generate_response(user_message):
     """
     Notionの必要DBだけを取得し、過去の関連するAI改善例を加えて、
     Geminiを最終回答生成の1回だけ呼び出します。
-    LINEへ返す際はMarkdownを除去したプレーンテキストに整形します。
+
+    特別コマンド:
+      AI Lite  -> gemini-3.5-flash-lite
+      AI Flash -> gemini-3.6-flash
+
+    app.pyでは「AI 」より後ろだけがこの関数へ渡るため、ここでは
+    user_message が Lite / Flash の場合にモデル切替だけ行います。
     """
+    command = str(user_message or "").strip()
+    if command.lower() in {"lite", "l"} or command in {"軽量", "ライト"}:
+        _, label = set_selected_model("lite")
+        return f"AIモデルを {label} に切り替えました。\n使用モデル: {get_selected_model()}\n次から「AI 質問内容」で使えます。"
+    if command.lower() in {"flash", "f"} or command in {"通常", "高性能"}:
+        _, label = set_selected_model("flash")
+        return f"AIモデルを {label} に切り替えました。\n使用モデル: {get_selected_model()}\n次から「AI 質問内容」で使えます。"
+    if command.lower() in {"model", "モデル"}:
+        return f"現在のAIモデル: {get_selected_model_label()}\n{get_selected_model()}\n切替: AI Lite / AI Flash"
+
     notion_context = notion_helper.dynamic_search_and_fetch(user_message)
     feedback_context = ai_feedback.build_feedback_context(user_message)
 
@@ -72,8 +118,8 @@ def generate_response(user_message):
     )
 
     try:
-        response = notion_helper.call_gemini_with_retry(notion_helper.GEMINI_MODEL, prompt)
+        response = notion_helper.call_gemini_with_retry(get_selected_model(), prompt)
         return sanitize_for_line(response.text)
     except Exception as e:
-        print(f"Gemini APIエラー: {e}")
+        print(f"Gemini APIエラー ({get_selected_model()}): {e}")
         return f"AIの応答生成中にエラーが発生しました: {str(e)}"
