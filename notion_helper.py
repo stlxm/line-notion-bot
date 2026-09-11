@@ -15,7 +15,7 @@ NOTION_MONTHLY_DATABASE_ID = os.environ.get("NOTION_MONTHLY_DATABASE_ID", "")
 NOTION_FIXED_DATABASE_ID = os.environ.get("NOTION_FIXED_DATABASE_ID", "")
 NOTION_DATABASE_IDS = os.environ.get("NOTION_DATABASE_IDS", "")
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 JST = timezone(timedelta(hours=9), "JST")
@@ -78,419 +78,297 @@ def _notion_headers():
     }
 
 
-def _clean_id(database_id):
-    if not database_id:
-        return ""
-    return database_id.strip().replace("-", "")
-
-
-def get_all_database_sources():
-    """
-    専用DB IDと NOTION_DATABASE_IDS を自動統合し、重複を除去します。
-    NOTION_DATABASE_IDS には「専用変数にない追加DB」だけ設定すればOKです。
-    """
-    sources = [
-        ("家計簿", NOTION_KAKEIBO_DATABASE_ID),
-        ("月別管理", NOTION_MONTHLY_DATABASE_ID),
-        ("固定費", NOTION_FIXED_DATABASE_ID),
-        ("メモ", NOTION_MEMO_DATABASE_ID),
-        ("URL", NOTION_URL_DATABASE_ID),
-    ]
-    for database_id in NOTION_DATABASE_IDS.split(","):
-        database_id = database_id.strip()
-        if database_id:
-            sources.append(("追加DB", database_id))
-
-    deduped = []
-    seen = set()
-    for role, database_id in sources:
-        normalized = _clean_id(database_id)
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        deduped.append({"role": role, "database_id": database_id.strip()})
-    return deduped
+def _is_configured(database_id):
+    return bool(str(database_id or "").strip())
 
 
 def get_all_database_ids():
-    return [item["database_id"] for item in get_all_database_sources()]
+    ids = []
+    for db_id in [
+        NOTION_KAKEIBO_DATABASE_ID,
+        NOTION_MONTHLY_DATABASE_ID,
+        NOTION_FIXED_DATABASE_ID,
+        NOTION_MEMO_DATABASE_ID,
+        NOTION_URL_DATABASE_ID,
+    ]:
+        if _is_configured(db_id) and db_id not in ids:
+            ids.append(db_id)
+
+    for db_id in [x.strip() for x in NOTION_DATABASE_IDS.split(",") if x.strip()]:
+        if db_id not in ids:
+            ids.append(db_id)
+    return ids
 
 
 def get_database_title(database_id):
-    schema = _get_database_schema(database_id)
-    return schema.get("title", "データベース") if schema else "データベース"
+    try:
+        res = requests.get(
+            f"https://api.notion.com/v1/databases/{database_id}",
+            headers=_notion_headers(),
+            timeout=10,
+        )
+        if res.status_code != 200:
+            return "無題DB"
+        title_items = res.json().get("title", [])
+        title = "".join(x.get("plain_text", "") for x in title_items).strip()
+        return title or "無題DB"
+    except Exception:
+        return "無題DB"
 
 
 def get_database_properties(database_id):
-    schema = _get_database_schema(database_id)
-    if not schema:
-        return []
-    return list(schema.get("properties", {}).items())
-
-
-def _get_database_schema(database_id, force=False):
-    """DBタイトルとプロパティ型を10分キャッシュし、毎回のNotionメタデータ取得を減らします。"""
-    if not database_id:
-        return None
-
-    cache_key = _clean_id(database_id)
-    now = time.time()
-    cached = _SCHEMA_CACHE.get(cache_key)
-    if cached and not force and now - cached["cached_at"] < _SCHEMA_CACHE_TTL:
-        return cached["schema"]
-
-    url = f"https://api.notion.com/v1/databases/{database_id}"
     try:
-        res = requests.get(url, headers=_notion_headers(), timeout=7)
+        res = requests.get(
+            f"https://api.notion.com/v1/databases/{database_id}",
+            headers=_notion_headers(),
+            timeout=10,
+        )
         if res.status_code != 200:
-            print(f"DBスキーマ取得エラー ({res.status_code}): {res.text}")
-            return None
-
-        data = res.json()
-        title_list = data.get("title", [])
-        title = "".join(x.get("plain_text", "") for x in title_list).strip() or "データベース"
-        properties = {}
-        for name, details in data.get("properties", {}).items():
-            p_type = details.get("type")
-            if p_type:
-                properties[name] = p_type
-
-        schema = {
-            "database_id": database_id,
-            "title": title,
-            "properties": properties,
-        }
-        _SCHEMA_CACHE[cache_key] = {"cached_at": now, "schema": schema}
-        return schema
+            return []
+        props = res.json().get("properties", {})
+        supported = {"title", "rich_text", "number", "select", "multi_select", "date", "checkbox", "url"}
+        return [(name, p.get("type")) for name, p in props.items() if p.get("type") in supported]
     except Exception as e:
-        print(f"DBスキーマ取得エラー: {e}")
-        return None
+        print(f"Notionプロパティ取得エラー: {e}")
+        return []
 
 
 def create_notion_page(database_id, collected_data, prop_types):
-    if not database_id:
+    properties = {}
+    for name, value in collected_data.items():
+        prop_type = prop_types.get(name)
+        if prop_type == "title":
+            properties[name] = {"title": [{"text": {"content": str(value)}}]}
+        elif prop_type == "rich_text":
+            properties[name] = {"rich_text": [{"text": {"content": str(value)}}]}
+        elif prop_type == "number":
+            try:
+                properties[name] = {"number": float(str(value).replace(",", ""))}
+            except Exception:
+                properties[name] = {"number": None}
+        elif prop_type == "select":
+            properties[name] = {"select": {"name": str(value)}}
+        elif prop_type == "multi_select":
+            values = [x.strip() for x in re.split(r"[,、]", str(value)) if x.strip()]
+            properties[name] = {"multi_select": [{"name": x} for x in values]}
+        elif prop_type == "date":
+            properties[name] = {"date": {"start": str(value)}}
+        elif prop_type == "checkbox":
+            properties[name] = {"checkbox": str(value).lower() in {"true", "1", "yes", "はい", "on"}}
+        elif prop_type == "url":
+            properties[name] = {"url": str(value)}
+
+    try:
+        res = requests.post(
+            "https://api.notion.com/v1/pages",
+            headers=_notion_headers(),
+            json={"parent": {"database_id": database_id}, "properties": properties},
+            timeout=15,
+        )
+        if res.status_code != 200:
+            print(f"Notionページ作成エラー ({res.status_code}): {res.text}")
+        return res.status_code == 200
+    except Exception as e:
+        print(f"Notionページ作成通信エラー: {e}")
         return False
 
-    properties = {}
-    for prop_name, val in collected_data.items():
-        p_type = prop_types.get(prop_name)
-        if p_type == "title":
-            properties[prop_name] = {"title": [{"text": {"content": val}}]}
-        elif p_type == "rich_text":
-            properties[prop_name] = {"rich_text": [{"text": {"content": val}}]}
-        elif p_type == "number":
-            try:
-                properties[prop_name] = {"number": float(val)}
-            except ValueError:
-                properties[prop_name] = {"number": 0}
-        elif p_type == "select":
-            properties[prop_name] = {"select": {"name": val}}
-        elif p_type == "multi_select":
-            values = [x.strip() for x in re.split(r"[,、]", val) if x.strip()]
-            properties[prop_name] = {"multi_select": [{"name": x} for x in values]}
-        elif p_type == "checkbox":
-            properties[prop_name] = {"checkbox": str(val).lower() in ["true", "1", "yes", "はい", "on"]}
-        elif p_type == "date":
-            properties[prop_name] = {"date": {"start": val}}
-        elif p_type == "url":
-            properties[prop_name] = {"url": val}
 
-    payload = {"parent": {"database_id": database_id}, "properties": properties}
-    try:
-        res = requests.post(
-            "https://api.notion.com/v1/pages",
-            headers=_notion_headers(),
-            json=payload,
-            timeout=7,
-        )
-        if res.status_code == 200:
-            return True
-        print(f"Notionページ作成エラー ({res.status_code}): {res.text}")
-    except Exception as e:
-        print(f"Notionページ作成エラー: {e}")
-    return False
-
-
-def add_url_to_notion(url_text):
+def add_url_to_notion(url):
     if not NOTION_URL_DATABASE_ID:
-        return "URL保存先のデータベースが設定されていません。"
+        return "URL保存DBが設定されていません。"
+    props = get_database_properties(NOTION_URL_DATABASE_ID)
+    if not props:
+        return "URL保存DBのプロパティ取得に失敗しました。"
+    prop_map = {name: ptype for name, ptype in props}
+    title_name = next((name for name, ptype in props if ptype == "title"), None)
+    if not title_name:
+        return "URL保存DBにTitleプロパティがありません。"
+    data = {title_name: url}
+    for name, ptype in props:
+        if ptype == "url" and name != title_name:
+            data[name] = url
+            break
+    return "URLをNotionに保存しました。" if create_notion_page(NOTION_URL_DATABASE_ID, data, prop_map) else "URLの保存に失敗しました。"
 
-    payload = {
-        "parent": {"database_id": NOTION_URL_DATABASE_ID},
-        "properties": {"URL": {"title": [{"text": {"content": url_text}}]}},
-    }
+
+def _get_schema(database_id):
+    now = time.time()
+    cached = _SCHEMA_CACHE.get(database_id)
+    if cached and now - cached[0] < _SCHEMA_CACHE_TTL:
+        return cached[1]
+    try:
+        res = requests.get(
+            f"https://api.notion.com/v1/databases/{database_id}",
+            headers=_notion_headers(),
+            timeout=10,
+        )
+        if res.status_code != 200:
+            return {}
+        data = res.json()
+        schema = {
+            "title": get_database_title(database_id),
+            "properties": data.get("properties", {}),
+        }
+        _SCHEMA_CACHE[database_id] = (now, schema)
+        return schema
+    except Exception as e:
+        print(f"Notionスキーマ取得エラー: {e}")
+        return {}
+
+
+def _score_database(question, database_id):
+    schema = _get_schema(database_id)
+    title = schema.get("title", "")
+    prop_names = " ".join(schema.get("properties", {}).keys())
+    text = f"{title} {prop_names}".lower()
+    question_lower = question.lower()
+    score = 0
+    for role, hints in ROLE_HINTS.items():
+        title_match = role.lower() in text
+        hint_matches = sum(1 for hint in hints if hint.lower() in question_lower)
+        if title_match and hint_matches:
+            score += 10 + hint_matches * 3
+    for token in re.findall(r"[A-Za-z0-9一-龠ぁ-んァ-ヶー]+", question_lower):
+        if len(token) >= 2 and token in text:
+            score += 2
+    return score
+
+
+def _extract_plain_value(prop):
+    ptype = prop.get("type")
+    if ptype == "title":
+        return "".join(x.get("plain_text", "") for x in prop.get("title", []))
+    if ptype == "rich_text":
+        return "".join(x.get("plain_text", "") for x in prop.get("rich_text", []))
+    if ptype == "number":
+        return prop.get("number")
+    if ptype == "select":
+        obj = prop.get("select") or {}
+        return obj.get("name")
+    if ptype == "multi_select":
+        return ", ".join(x.get("name", "") for x in prop.get("multi_select", []))
+    if ptype == "date":
+        obj = prop.get("date") or {}
+        return obj.get("start")
+    if ptype == "checkbox":
+        return prop.get("checkbox")
+    if ptype == "url":
+        return prop.get("url")
+    return None
+
+
+def _query_database(database_id, date_filter=None, page_size=40):
+    body = {"page_size": min(page_size, 100)}
+    if date_filter:
+        body["filter"] = date_filter
+    results = []
     try:
         res = requests.post(
-            "https://api.notion.com/v1/pages",
+            f"https://api.notion.com/v1/databases/{database_id}/query",
             headers=_notion_headers(),
-            json=payload,
-            timeout=7,
+            json=body,
+            timeout=15,
         )
-        if res.status_code == 200:
-            return "後で見るURLデータベースに保存しました！"
-        print(f"URL保存エラー ({res.status_code}): {res.text}")
+        if res.status_code != 200:
+            print(f"Notion DB query error ({res.status_code}): {res.text}")
+            return []
+        results.extend(res.json().get("results", []))
     except Exception as e:
-        print(f"URL保存エラー: {e}")
-    return "URLの保存に失敗しました。"
+        print(f"Notion DB query通信エラー: {e}")
+    return results[:page_size]
 
 
-def fetch_notion_context():
-    """互換性維持用。AI検索は dynamic_search_and_fetch() を利用します。"""
-    return ""
+def _find_date_property(schema):
+    for name, prop in schema.get("properties", {}).items():
+        if prop.get("type") == "date":
+            return name
+    return None
 
 
-def _text_similarity(question, text):
-    question = question.lower().replace(" ", "")
-    text = text.lower().replace(" ", "")
-    if not text or text in ["db", "database", "データベース", "管理", "一覧"]:
-        return 0
-    if text in question:
-        return 8
-    if len(text) >= 2:
-        ratio = SequenceMatcher(None, text, question).ratio()
-        if ratio >= 0.45:
-            return ratio * 4
-    return 0
-
-
-def _score_database(question, source, schema):
-    q = question.lower()
-    score = 0.0
-    reasons = []
-
-    role = source["role"]
-    for keyword in ROLE_HINTS.get(role, []):
-        if keyword.lower() in q:
-            score += 6
-            reasons.append(f"role:{keyword}")
-
-    title = schema.get("title", "")
-    title_score = _text_similarity(question, title)
-    if title_score:
-        score += title_score + 4
-        reasons.append(f"title:{title}")
-
-    for prop_name in schema.get("properties", {}):
-        prop_score = _text_similarity(question, prop_name)
-        if prop_score:
-            score += min(5, prop_score)
-            reasons.append(f"prop:{prop_name}")
-
-    prop_types = set(schema.get("properties", {}).values())
-    if any(word in q for word in ["いくら", "金額", "合計", "平均", "高い", "安い"]) and "number" in prop_types:
-        score += 2
-    if any(word in q for word in ["今日", "昨日", "今週", "先週", "今月", "先月", "今年", "最近"]) and "date" in prop_types:
-        score += 2
-    if any(word in q for word in ["種類", "カテゴリ", "ジャンル", "分類"]) and ("select" in prop_types or "multi_select" in prop_types):
-        score += 2
-
-    return score, reasons
-
-
-def _build_catalog():
-    catalog = []
-    for source in get_all_database_sources():
-        schema = _get_database_schema(source["database_id"])
-        if not schema:
-            continue
-        item = dict(source)
-        item["schema"] = schema
-        catalog.append(item)
-    return catalog
-
-
-def select_databases_for_question(question, max_databases=MAX_AI_DATABASES):
-    """Geminiを使わず、DB名・専用役割・プロパティ名・型から最大2DBを選択します。"""
-    catalog = _build_catalog()
-    if not catalog:
-        return []
-
-    scored = []
-    for item in catalog:
-        score, reasons = _score_database(question, item, item["schema"])
-        scored.append((score, item, reasons))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    positive = [x for x in scored if x[0] > 0]
-
-    if positive:
-        selected = positive[:max_databases]
-    else:
-        extras = [x for x in scored if x[1]["role"] == "追加DB"]
-        selected = (extras or scored)[:max_databases]
-
-    print(
-        "[AI Router] "
-        + " / ".join(
-            f"{x[1]['schema']['title']} score={x[0]:.1f} reasons={','.join(x[2][:4]) or '-'}"
-            for x in selected
-        )
-    )
-    return [x[1] for x in selected]
-
-
-def _date_range_from_question(question):
-    now = datetime.now(JST)
-    today = now.date()
-
+def _date_range_for_question(question):
+    today = datetime.now(JST).date()
     if "今日" in question:
         start = today
         end = today + timedelta(days=1)
     elif "昨日" in question:
         start = today - timedelta(days=1)
         end = today
-    elif "先週" in question:
-        this_monday = today - timedelta(days=today.weekday())
-        start = this_monday - timedelta(days=7)
-        end = this_monday
     elif "今週" in question:
         start = today - timedelta(days=today.weekday())
         end = start + timedelta(days=7)
-    elif "先月" in question:
-        first_this_month = today.replace(day=1)
-        end = first_this_month
-        prev_last_day = first_this_month - timedelta(days=1)
-        start = prev_last_day.replace(day=1)
+    elif "先週" in question:
+        end = today - timedelta(days=today.weekday())
+        start = end - timedelta(days=7)
     elif "今月" in question:
         start = today.replace(day=1)
         if start.month == 12:
             end = start.replace(year=start.year + 1, month=1)
         else:
             end = start.replace(month=start.month + 1)
+    elif "先月" in question:
+        this_month = today.replace(day=1)
+        end = this_month
+        if this_month.month == 1:
+            start = this_month.replace(year=this_month.year - 1, month=12)
+        else:
+            start = this_month.replace(month=this_month.month - 1)
     elif "今年" in question:
         start = today.replace(month=1, day=1)
         end = start.replace(year=start.year + 1)
     else:
         return None
-
     return start.isoformat(), end.isoformat()
 
 
-def _build_query_payload(question, schema):
-    payload = {"page_size": MAX_ROWS_PER_DB}
-    date_props = [name for name, p_type in schema.get("properties", {}).items() if p_type == "date"]
-    period = _date_range_from_question(question)
-
-    if date_props:
-        date_prop = date_props[0]
-        payload["sorts"] = [{"property": date_prop, "direction": "descending"}]
-        if period:
-            start, end = period
-            payload["filter"] = {
-                "and": [
-                    {"property": date_prop, "date": {"on_or_after": start}},
-                    {"property": date_prop, "date": {"before": end}},
-                ]
-            }
-    return payload
-
-
-def _property_to_text(prop_val):
-    v_type = prop_val.get("type")
-    if v_type == "title":
-        return "".join(x.get("plain_text", "") for x in prop_val.get("title", []))
-    if v_type == "rich_text":
-        return "".join(x.get("plain_text", "") for x in prop_val.get("rich_text", []))
-    if v_type == "number":
-        value = prop_val.get("number")
-        return "" if value is None else str(value)
-    if v_type == "select":
-        value = prop_val.get("select")
-        return value.get("name", "") if value else ""
-    if v_type == "multi_select":
-        return ", ".join(x.get("name", "") for x in prop_val.get("multi_select", []) if x.get("name"))
-    if v_type == "date":
-        value = prop_val.get("date")
-        if not value:
-            return ""
-        start = value.get("start", "")
-        end = value.get("end")
-        return f"{start}〜{end}" if end else start
-    if v_type == "checkbox":
-        return "はい" if prop_val.get("checkbox") else "いいえ"
-    if v_type == "url":
-        return prop_val.get("url") or ""
-    if v_type == "status":
-        value = prop_val.get("status")
-        return value.get("name", "") if value else ""
-    return ""
-
-
-def _fetch_database_context(question, item):
-    database_id = item["database_id"]
-    schema = item["schema"]
-    query_url = f"https://api.notion.com/v1/databases/{database_id}/query"
-    payload = _build_query_payload(question, schema)
-
-    try:
-        response = requests.post(
-            query_url,
-            headers=_notion_headers(),
-            json=payload,
-            timeout=10,
-        )
-    except Exception as e:
-        return f"--- データベース: {schema['title']} ---\n取得エラー: {e}"
-
-    if response.status_code != 200:
-        return f"--- データベース: {schema['title']} ---\nNotion検索エラー: {response.text[:500]}"
-
-    results = response.json().get("results", [])
-    lines = [f"--- データベース: {schema['title']} / {len(results)}件 ---"]
-
-    for page in results[:MAX_ROWS_PER_DB]:
-        row_parts = []
-        for prop_name, prop_val in page.get("properties", {}).items():
-            text = _property_to_text(prop_val)
-            if text:
-                row_parts.append(f"{prop_name}: {text}")
-        if row_parts:
-            lines.append(" | ".join(row_parts))
-
-    if len(lines) == 1:
-        lines.append("該当データなし")
+def _serialize_database(database_id, question):
+    schema = _get_schema(database_id)
+    if not schema:
+        return ""
+    date_filter = None
+    date_range = _date_range_for_question(question)
+    date_prop = _find_date_property(schema)
+    if date_range and date_prop:
+        start, end = date_range
+        date_filter = {
+            "and": [
+                {"property": date_prop, "date": {"on_or_after": start}},
+                {"property": date_prop, "date": {"before": end}},
+            ]
+        }
+    pages = _query_database(database_id, date_filter=date_filter, page_size=MAX_ROWS_PER_DB)
+    lines = [f"【DB: {schema.get('title', '無題DB')}】"]
+    for page in pages:
+        props = page.get("properties", {})
+        values = []
+        for name, prop in props.items():
+            value = _extract_plain_value(prop)
+            if value not in [None, "", []]:
+                values.append(f"{name}={value}")
+        if values:
+            lines.append("・" + " / ".join(values))
     return "\n".join(lines)
 
 
-def dynamic_search_and_fetch(user_message):
-    """
-    質問内容から必要なDBをPythonで選び、最大2DBだけ取得します。
-    DB選択にはGemini APIを使いません。
-    """
-    selected = select_databases_for_question(user_message)
+def dynamic_search_and_fetch(question):
+    db_ids = get_all_database_ids()
+    if not db_ids:
+        return "Notionデータベースが設定されていません。"
+
+    scored = []
+    for db_id in db_ids:
+        scored.append((_score_database(question, db_id), db_id))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    selected = [db_id for score, db_id in scored if score > 0][:MAX_AI_DATABASES]
     if not selected:
-        return "参照可能なNotionデータベースが設定されていません。"
+        selected = [db_id for _, db_id in scored[:MAX_AI_DATABASES]]
 
-    contexts = []
-    total_chars = 0
-    for item in selected:
-        context = _fetch_database_context(user_message, item)
-        remaining = MAX_CONTEXT_CHARS - total_chars
-        if remaining <= 0:
-            break
-        context = context[:remaining]
-        contexts.append(context)
-        total_chars += len(context)
-
-    return "\n\n".join(contexts)
-
-
-def generate_gemini_response(user_message, notion_context=""):
-    """
-    1質問につきGeminiは最終回答生成の1回だけ呼び出します。
-    DBルーティングはPython、Notion取得後の要約・分析のみGeminiが担当します。
-    """
-    try:
-        dynamic_context = dynamic_search_and_fetch(user_message)
-        prompt = (
-            "あなたはユーザーのNotionデータを管理・参照するパーソナルアシスタントです。"
-            "以下のNotion検索結果だけを根拠として、日本語で簡潔かつ正確に答えてください。"
-            "情報が不足している場合は推測せず、不足していると伝えてください。\n\n"
-            f"【Notion検索結果】\n{dynamic_context}\n\n"
-            f"【ユーザーからの質問】\n{user_message}"
-        )
-        response = call_gemini_with_retry(GEMINI_MODEL, prompt)
-        return response.text
-    except Exception as e:
-        print(f"Gemini APIエラー: {e}")
-        return f"AIの応答生成中にエラーが発生しました: {str(e)}"
+    chunks = []
+    for db_id in selected:
+        text = _serialize_database(db_id, question)
+        if text:
+            chunks.append(text)
+    context = "\n\n".join(chunks)
+    if len(context) > MAX_CONTEXT_CHARS:
+        context = context[:MAX_CONTEXT_CHARS] + "\n…（長いため省略）"
+    return context or "該当するNotionデータが見つかりませんでした。"
