@@ -122,6 +122,28 @@ sendMonthEndCardCheck → 1日1回
 
 ---
 
+# AIモデル運用
+
+状態: 実装済み・要実機確認
+
+2026-09-11時点のLINE AIモデル切替:
+
+```text
+AI Lite   → gemini-3.5-flash-lite
+AI Flash  → gemini-3.6-flash
+AI Model  → 現在モデル確認
+```
+
+既定はLite。Render再起動・再デプロイ後もLiteへ戻す。
+
+実装箇所:
+- `ai_engine.py`: 選択モデル保持、Lite/Flash切替、現在モデル確認
+- `notion_helper.py`: 既定モデル表記を`gemini-3.5-flash-lite`へ変更
+
+モデル選択は現在Renderプロセス内メモリ。永続化はしていない。将来、ユーザー別設定DBを実装するPhaseでは永続設定へ移行可能。
+
+---
+
 # Phase 2 — 月次・予算判断
 
 状態: **未着手**
@@ -177,9 +199,10 @@ sendMonthEndCardCheck → 1日1回
 1. Render最新デプロイ後、LINEで「カードテスト」
 2. PHASE1_TEST.md の通常分類・学習を確認
 3. 必要に応じ「カードテスト」を複数回使い、一括分類/自動登録候補を確認
-4. 実機不具合があればPhase 1を修正
-5. 問題なければPhase 1を「完了」に変更
-6. その後、ユーザーから指示があった時だけPhase 2開始
+4. AI Lite / AI Flash / AI Model の切替確認
+5. 実機不具合があればPhase 1またはAI切替を修正
+6. 問題なければPhase 1を「完了」に変更
+7. その後、ユーザーから指示があった時だけPhase 2開始
 ```
 
 Phase 2は勝手に開始しない。
@@ -199,4 +222,6 @@ Phase 2は勝手に開始しない。
 - 月末未処理チェックとGAS関数を追加。
 - `PHASE1_TEST.md`を追加。
 - 本物の未処理がなくても試せる`カードテスト`を追加。
+- Gemini既定モデルを`gemini-3.5-flash-lite`へ変更。
+- LINEから`AI Lite` / `AI Flash` / `AI Model`でモデル切替・確認できるようにした。
 - Phase 2は未着手のまま停止。
