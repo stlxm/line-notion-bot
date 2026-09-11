@@ -31,10 +31,27 @@ LINEを入口に、家計簿・予算・カード利用通知・カード未処�
 メモ 牛乳を買う
 メモ一覧
 AI 今月の食費を分析して
+AI Lite
+AI Flash
+AI Model
 AI改善
 ```
 
 Geminiは`AI `を明示した質問だけで使用します。
+
+## AIモデル切替
+
+通常は低コスト・低レイテンシの `gemini-3.5-flash-lite` から開始します。
+
+```text
+AI Lite   → gemini-3.5-flash-lite
+AI Flash  → gemini-3.6-flash
+AI Model  → 現在のモデルを確認
+```
+
+モデルを切り替えた後は通常どおり `AI 質問内容` と送れば、選択中のモデルを使います。
+
+モデル選択はRenderプロセス内で保持します。Renderの再起動・再デプロイ後はLiteへ戻ります。
 
 ---
 
