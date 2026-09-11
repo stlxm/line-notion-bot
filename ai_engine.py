@@ -1,4 +1,3 @@
-import os
 import re
 
 import ai_feedback
@@ -7,11 +6,9 @@ import notion_helper
 LITE_MODEL = "gemini-3.5-flash-lite"
 FLASH_MODEL = "gemini-3.6-flash"
 
-# 通常は低コスト・低レイテンシのLiteを使う。
-# LINEで「AI Lite」「AI Flash」と送ると、Renderプロセス内で切り替えられる。
-_selected_model = os.environ.get("GEMINI_MODEL", LITE_MODEL).strip() or LITE_MODEL
-if _selected_model not in {LITE_MODEL, FLASH_MODEL}:
-    _selected_model = LITE_MODEL
+# LINE AIはRender再起動後も必ずLiteから開始する。
+# 「AI Lite」「AI Flash」で実行中プロセスのモデルを切り替えられる。
+_selected_model = LITE_MODEL
 
 
 def get_selected_model():
@@ -40,51 +37,31 @@ def sanitize_for_line(text):
         return ""
 
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
-
-    # コードブロック記号だけ除去し、中身は残す
     cleaned = re.sub(r"```(?:[a-zA-Z0-9_+-]+)?\n?", "", cleaned)
     cleaned = cleaned.replace("```", "")
-
-    # 見出し記号
     cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
-
-    # 太字・斜体・取り消し線・インラインコード
     cleaned = cleaned.replace("**", "")
     cleaned = cleaned.replace("__", "")
     cleaned = cleaned.replace("~~", "")
     cleaned = cleaned.replace("`", "")
-
-    # Markdown引用
     cleaned = re.sub(r"(?m)^\s*>\s?", "", cleaned)
-
-    # Markdownリンク [表示名](URL) → 表示名 (URL)
     cleaned = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", cleaned)
-
-    # 箇条書きはLINEで読みやすい「・」に統一
     cleaned = re.sub(r"(?m)^\s*[-*+]\s+", "・", cleaned)
-
-    # 番号付きリストは番号を維持
     cleaned = re.sub(r"(?m)^\s*(\d+)\.\s+", r"\1. ", cleaned)
-
-    # 水平線などMarkdown由来の装飾行
     cleaned = re.sub(r"(?m)^\s*[-*_]{3,}\s*$", "", cleaned)
-
-    # 過剰な空行を抑える
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 
 
 def generate_response(user_message):
-    """
-    Notionの必要DBだけを取得し、過去の関連するAI改善例を加えて、
-    Geminiを最終回答生成の1回だけ呼び出します。
+    """Notion文脈を使ってGemini回答を生成し、LINE向けに整形します。
 
     特別コマンド:
       AI Lite  -> gemini-3.5-flash-lite
       AI Flash -> gemini-3.6-flash
+      AI Model -> 現在モデルを確認
 
-    app.pyでは「AI 」より後ろだけがこの関数へ渡るため、ここでは
-    user_message が Lite / Flash の場合にモデル切替だけ行います。
+    app.pyでは「AI 」より後ろだけがこの関数へ渡ります。
     """
     command = str(user_message or "").strip()
     if command.lower() in {"lite", "l"} or command in {"軽量", "ライト"}:
