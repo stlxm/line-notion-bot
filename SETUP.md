@@ -171,9 +171,34 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
+`GEMINI_MODEL` は互換用に残していますが、LINEのAI検索はコード上でLiteから開始します。Renderの`GEMINI_MODEL`が以前の`gemini-3.6-flash`のままでも、LINE AIの初期選択はLiteです。
+
 ---
 
-# 6. GAS
+# 6. Gemini AIモデル切替
+
+LINE AIの初期モデル:
+
+```text
+gemini-3.5-flash-lite
+```
+
+LINEコマンド:
+
+```text
+AI Lite   → gemini-3.5-flash-lite へ切替
+AI Flash  → gemini-3.6-flash へ切替
+AI Model  → 現在の選択を確認
+AI 質問   → 選択中モデルで回答
+```
+
+モデル選択はRenderプロセスのメモリに保持されます。Renderの再起動・再デプロイ後は`gemini-3.5-flash-lite`へ戻ります。
+
+Google側でモデルIDが変更・廃止された場合は`ai_engine.py`の`LITE_MODEL` / `FLASH_MODEL`と、このSETUP.mdを同時更新してください。
+
+---
+
+# 7. GAS
 
 Apps Scriptへ最新版をコピー:
 
@@ -196,7 +221,7 @@ GitHubの`.gs`は通常GASへ自動同期されません。
 
 ---
 
-# 7. GASトリガー
+# 8. GASトリガー
 
 | 関数 | 推奨 |
 |---|---|
@@ -211,7 +236,7 @@ GitHubの`.gs`は通常GASへ自動同期されません。
 
 ---
 
-# 8. Phase 1カード自動化
+# 9. Phase 1カード自動化
 
 ## テスト用カード
 
@@ -278,7 +303,7 @@ AND 本人が自動登録ON
 
 ---
 
-# 9. 2026年9月バックフィル
+# 10. 2026年9月バックフィル
 
 GASで:
 
@@ -290,13 +315,13 @@ backfillSeptember2026
 
 ---
 
-# 10. Postback制限
+# 11. Postback制限
 
 LINE Postback `data`は300文字以内。未処理カードでは店名・金額等を埋め込まず`pending_id`と最小限の値だけ送ります。
 
 ---
 
-# 11. 導入確認
+# 12. 導入確認
 
 `PHASE1_TEST.md`を上から実行してください。
 
@@ -304,7 +329,7 @@ LINE Postback `data`は300文字以内。未処理カードでは店名・金額
 
 ---
 
-# 12. トラブル時
+# 13. トラブル時
 
 1. Render最新デプロイ成功を確認。
 2. Render Logsの最初のTracebackを確認。
@@ -314,10 +339,15 @@ LINE Postback `data`は300文字以内。未処理カードでは店名・金額
 6. 最新`FinanceReports.gs`をGASへコピーしたか確認。
 7. `SCHEDULER_SECRET`がGAS/Renderで一致しているか確認。
 
+AI関連の確認:
+- `AI Lite`送信後に`gemini-3.5-flash-lite`と表示されるか
+- `AI Flash`送信後に`gemini-3.6-flash`と表示されるか
+- 切替後の`AI 質問内容`が正常に回答されるか
+
 詳細は`MAINTENANCE.md`。
 
 ---
 
-# 13. セキュリティ
+# 14. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
