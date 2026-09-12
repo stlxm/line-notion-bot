@@ -5,12 +5,14 @@
 // - Shufooの店舗ページ/画像URLから配信IDを列挙する
 // - /shop/264241/<配信ID>/ を1チラシとして扱う
 // - 配信IDごとにページ・画像を取得し、Geminiも個別解析する
+// - 1回目の解析が不完全なら、その配信IDだけ厳密プロンプト/temperature=0で1回再試行する
+// - 検出件数と解析成功件数が一致しない場合はNotionへ部分同期しない
 // - 新規チラシは確認待ち / 有効=false
 // - Notion「チラシ一覧」で確認済みにしたものだけ生活カレンダーで有効化
 
 const SUMMIT_SHUFOO_ROOT_URL = "https://asp.shufoo.net/t/asp_iframe/shop/264241/?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore";
 const SUMMIT_SHUFOO_SEED_URL = "https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore";
-const LIFE_FLYER_SIGNATURE_KEY = "SUMMIT_LIFE_FLYER_CATALOG_SIGNATURE_V3";
+const LIFE_FLYER_SIGNATURE_KEY = "SUMMIT_LIFE_FLYER_CATALOG_SIGNATURE_V4";
 const LIFE_FLYER_MAX_IDS = 12;
 const LIFE_FLYER_MAX_IMAGES_PER_ID = 4;
 
@@ -22,6 +24,7 @@ function runDailySummitLifeCalendarAutomation() {
 
   if (!catalog.signature || catalog.signature !== previousSignature) {
     const flyers = analyzeShufooFlyersById_(catalog);
+    assertAllLifeFlyersAnalyzed_(catalog, flyers);
     const sync = syncLifeFlyers_(flyers);
     Logger.log(`[チラシ同期] flyers=${sync.flyers} / calendar=${sync.deals}`);
     if (catalog.signature && flyers.length > 0) {
@@ -45,6 +48,9 @@ function testSummitLifeFlyerParse() {
   const catalog = collectShufooFlyerCatalog_();
   Logger.log("検出した配信ID: " + JSON.stringify(catalog.flyerPages.map(x => x.id)));
   const flyers = analyzeShufooFlyersById_(catalog);
+  const missing = getMissingLifeFlyerIds_(catalog, flyers);
+  Logger.log("解析成功ID: " + JSON.stringify(flyers.map(x => x.id)));
+  Logger.log("解析失敗ID: " + JSON.stringify(missing));
   Logger.log(JSON.stringify({
     sourceUrl: catalog.sourceUrl,
     flyerPages: catalog.flyerPages.map(x => ({
@@ -70,8 +76,15 @@ function testSummitShufooDeliveryIds() {
 function testSummitLifeFlyerSync() {
   const catalog = collectShufooFlyerCatalog_();
   const flyers = analyzeShufooFlyersById_(catalog);
+  assertAllLifeFlyersAnalyzed_(catalog, flyers);
   const result = syncLifeFlyers_(flyers);
-  Logger.log(JSON.stringify(result, null, 2));
+  Logger.log(JSON.stringify({
+    detected: catalog.flyerPages.length,
+    analyzed: flyers.length,
+    missing: [],
+    flyers: result.flyers,
+    deals: result.deals,
+  }, null, 2));
 }
 
 function applyLifeFlyerReviewsNow() {
@@ -135,7 +148,6 @@ function collectShufooFlyerCatalog_() {
     });
   });
 
-  // 重要: flyerEntries はオブジェクト配列なので uniqueStrings_ は使わない。
   flyerEntries = dedupeShufooFlyerEntries_(flyerEntries).slice(0, LIFE_FLYER_MAX_IDS);
 
   if (flyerEntries.length === 0) {
@@ -195,7 +207,6 @@ function extractShufooEntriesFromImageUrls_(imageUrls) {
 
 function extractShufooImageDeliveryId_(url) {
   const text = String(url || "").replace(/\\\//g, "/");
-  // 例: https://ipqcache2.shufoo.net/smt/c/2026/08/27/c/9783726841844/img/image1_00.jpg
   const match = text.match(/\/c\/\d{4}\/\d{2}\/\d{2}\/c\/(\d{6,})\/img\//i);
   return match ? match[1] : "";
 }
@@ -240,7 +251,6 @@ function collectSingleShufooFlyerPage_(id, url, discoveredImageUrls) {
     imageUrls = imageUrls.concat(extractImageUrls_(child.html, childUrl));
   });
 
-  // Shufooページが他配信の画像も含むことがあるため、配信IDが一致する画像を優先する。
   imageUrls = imageUrls.concat((discoveredImageUrls || []).filter(x => imageUrlBelongsToDeliveryId_(x, id)));
   imageUrls = uniqueStrings_(imageUrls).filter(isLikelyFlyerImageUrl_);
 
@@ -285,13 +295,52 @@ function fetchLifeFlyerImages_(urls, limit) {
 function analyzeShufooFlyersById_(catalog) {
   const flyers = [];
   (catalog.flyerPages || []).forEach(page => {
-    const flyer = analyzeSingleShufooFlyerWithGemini_(page);
-    if (flyer) flyers.push(flyer);
+    let flyer = null;
+    try {
+      flyer = analyzeSingleShufooFlyerWithGemini_(page, false);
+    } catch (e) {
+      Logger.log(`[解析1回目エラー] ${page.id}: ${e}`);
+    }
+
+    if (!isUsableLifeFlyer_(flyer)) {
+      Logger.log(`[解析再試行] ${page.id}: 1回目が不完全なため厳密解析を1回実行`);
+      try {
+        flyer = analyzeSingleShufooFlyerWithGemini_(page, true);
+      } catch (e) {
+        Logger.log(`[解析再試行エラー] ${page.id}: ${e}`);
+        flyer = null;
+      }
+    }
+
+    if (isUsableLifeFlyer_(flyer)) {
+      flyers.push(flyer);
+      Logger.log(`[解析OK] ${page.id} ${flyer.start_date}〜${flyer.end_date} ${flyer.deals.length}件`);
+    } else {
+      Logger.log(`[解析NG] ${page.id}: 再試行後も日付または商品情報を確定できませんでした`);
+    }
   });
   return flyers;
 }
 
-function analyzeSingleShufooFlyerWithGemini_(page) {
+function isUsableLifeFlyer_(flyer) {
+  return !!(flyer && flyer.id && flyer.start_date && flyer.end_date && Array.isArray(flyer.deals) && flyer.deals.length > 0);
+}
+
+function getMissingLifeFlyerIds_(catalog, flyers) {
+  const ok = {};
+  (flyers || []).forEach(f => { ok[String(f.id)] = true; });
+  return (catalog.flyerPages || []).map(x => String(x.id)).filter(id => !ok[id]);
+}
+
+function assertAllLifeFlyersAnalyzed_(catalog, flyers) {
+  const missing = getMissingLifeFlyerIds_(catalog, flyers);
+  if (missing.length > 0) {
+    Logger.log("解析失敗ID: " + JSON.stringify(missing));
+    throw new Error("一部チラシの解析に失敗したためNotion同期を中止しました。missing=" + missing.join(","));
+  }
+}
+
+function analyzeSingleShufooFlyerWithGemini_(page, strictRetry) {
   const props = PropertiesService.getScriptProperties();
   const apiKey = props.getProperty("GEMINI_API_KEY") || "";
   const model = props.getProperty("FLYER_GEMINI_MODEL") || "gemini-3.5-flash-lite";
@@ -299,7 +348,24 @@ function analyzeSingleShufooFlyerWithGemini_(page) {
   if (!page.images || page.images.length === 0) return null;
 
   const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
-  const prompt = [
+  const prompt = strictRetry ? [
+    "スーパーのチラシ画像を読み取ってください。推測は禁止です。",
+    `対象店舗: ${SUMMIT_FLYER_STORE_NAME}`,
+    `今日: ${today}`,
+    `Shufoo配信ID: ${page.id}`,
+    "重要: チラシに書かれた掲載期間・対象日を最優先で読み取ってください。",
+    "チラシ全体の日付が読めない場合でも、商品名と商品ごとの日付は読める範囲で返してください。",
+    "日付文字列を画像内で見つけた場合は date_evidence に原文も入れてください。",
+    "価格が書かれていない割引/ポイントカレンダーでも、カテゴリ名・対象日をdealsとして返してください。",
+    "説明なしのJSONだけを返してください。",
+    '{"title":"","type":"月間|週次|日替わり|その他|不明","start_date":"","end_date":"","date_evidence":"画像内の日付原文","deals":[{"product":"","price":"","unit":"","start_date":"","end_date":"","notes":"","priority":2,"image_url":""}]}',
+    "",
+    "【画像URL】",
+    (page.images || []).map(x => x.url).join("\n"),
+    "",
+    "【ページ本文】",
+    String(page.text || "").slice(0, 22000),
+  ].join("\n") : [
     "あなたはスーパーのチラシを正確に読み取るアシスタントです。",
     `対象店舗: ${SUMMIT_FLYER_STORE_NAME}`,
     `今日: ${today}`,
@@ -307,11 +373,12 @@ function analyzeSingleShufooFlyerWithGemini_(page) {
     "この入力は1つの配信IDだけです。別のチラシと混ぜず、この配信IDだけを解析してください。",
     "表示用タイトルは補助情報です。チラシの同一性は名前ではなく配信IDで管理します。",
     "typeは掲載期間に基づき 月間/週次/日替わり/その他 のいずれかにしてください。",
-    "20日以上なら月間、4〜19日なら週次、1〜2日なら日替わり、3日または判定不能はその他。",
+    "20日以上なら月間、3〜19日なら週次、1〜2日なら日替わり、判定不能はその他。",
     "商品名・価格・容量・対象日は画像または本文で読める内容だけを使い、推測で補わないでください。",
+    "価格がない割引/ポイントカレンダーも商品・カテゴリ情報として抽出してください。",
     "各商品に根拠画像URLをimage_urlへ入れてください。",
     "説明文なしのJSONだけを返してください。",
-    '{"title":"表示用タイトル","type":"月間|週次|日替わり|その他","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","deals":[{"product":"商品名","price":"価格","unit":"容量・単位","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","notes":"条件","priority":1,"image_url":"https://..."}]}',
+    '{"title":"表示用タイトル","type":"月間|週次|日替わり|その他","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","deals":[{"product":"商品名またはカテゴリ名","price":"価格","unit":"容量・単位","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","notes":"条件","priority":1,"image_url":"https://..."}]}',
     "",
     "【画像URL一覧】",
     (page.images || []).map((x, i) => `${i + 1}. ${x.url}`).join("\n"),
@@ -331,7 +398,7 @@ function analyzeSingleShufooFlyerWithGemini_(page) {
     contentType: "application/json",
     payload: JSON.stringify({
       contents: [{ role: "user", parts: parts }],
-      generationConfig: { temperature: 0.05, responseMimeType: "application/json" },
+      generationConfig: { temperature: strictRetry ? 0 : 0.05, responseMimeType: "application/json" },
     }),
     muteHttpExceptions: true,
   });
@@ -342,20 +409,36 @@ function analyzeSingleShufooFlyerWithGemini_(page) {
 
   const outer = JSON.parse(body);
   const outParts = (((outer.candidates || [])[0] || {}).content || {}).parts || [];
-  const parsed = JSON.parse(stripJsonFence_(outParts.map(x => x.text || "").join("").trim()));
+  const parsedText = stripJsonFence_(outParts.map(x => x.text || "").join("").trim());
+  if (!parsedText) return null;
+  const parsed = JSON.parse(parsedText);
   return sanitizeSingleLifeFlyer_(parsed, page);
 }
 
 function sanitizeSingleLifeFlyer_(raw, page) {
   raw = raw || {};
-  const start = normalizeDateString_(raw.start_date);
-  const end = normalizeDateString_(raw.end_date || raw.start_date);
-  if (!start || !end) return null;
-  const allowed = { "月間": true, "週次": true, "日替わり": true, "その他": true };
-  const inferred = inferLifeFlyerType_(start, end);
-  const type = allowed[raw.type] ? raw.type : inferred;
   const imageUrls = (page.images || []).map(x => x.url);
-  const deals = (Array.isArray(raw.deals) ? raw.deals : []).map(item => {
+  const rawDeals = Array.isArray(raw.deals) ? raw.deals : [];
+
+  const provisionalDeals = rawDeals.map(item => {
+    const startDate = normalizeDateString_(item.start_date);
+    const endDate = normalizeDateString_(item.end_date || item.start_date);
+    if (!item.product || !startDate || !endDate) return null;
+    return { start_date: startDate, end_date: endDate };
+  }).filter(Boolean);
+
+  let start = normalizeDateString_(raw.start_date);
+  let end = normalizeDateString_(raw.end_date || raw.start_date);
+  if ((!start || !end) && provisionalDeals.length > 0) {
+    const starts = provisionalDeals.map(x => x.start_date).sort();
+    const ends = provisionalDeals.map(x => x.end_date || x.start_date).sort();
+    if (!start) start = starts[0];
+    if (!end) end = ends[ends.length - 1];
+    Logger.log(`[期間救済] ${page.id}: ${start || "?"}〜${end || "?"}`);
+  }
+  if (!start || !end) return null;
+
+  const deals = rawDeals.map(item => {
     const startDate = normalizeDateString_(item.start_date || start);
     const endDate = normalizeDateString_(item.end_date || item.start_date || end || start);
     if (!item.product || !startDate || !endDate) return null;
@@ -372,9 +455,11 @@ function sanitizeSingleLifeFlyer_(raw, page) {
       image_url: imageUrl,
     };
   }).filter(Boolean);
+  if (deals.length === 0) return null;
 
+  const type = inferLifeFlyerType_(start, end);
   return {
-    id: page.id,
+    id: String(page.id),
     source_url: page.url,
     title: String(raw.title || `${type}チラシ ${page.id}`).trim().slice(0, 180),
     type: type,
@@ -389,7 +474,7 @@ function inferLifeFlyerType_(start, end) {
   if (!start || !end) return "その他";
   const days = Math.round((new Date(end + "T00:00:00+09:00") - new Date(start + "T00:00:00+09:00")) / 86400000) + 1;
   if (days >= 20) return "月間";
-  if (days >= 4) return "週次";
+  if (days >= 3) return "週次";
   if (days <= 2) return "日替わり";
   return "その他";
 }
@@ -402,6 +487,7 @@ function syncLifeFlyers_(flyers) {
     upsertLifeFlyerListPage_(flyer, flyerKey);
     dealCount += upsertLifeCalendarDeals_(flyer, flyerKey);
     flyerCount++;
+    Logger.log(`[同期OK] ${flyer.id} / ${flyer.start_date}〜${flyer.end_date} / ${flyer.deals.length}件`);
   });
   return { flyers: flyerCount, deals: dealCount };
 }
