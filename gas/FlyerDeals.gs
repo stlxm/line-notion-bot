@@ -1,55 +1,75 @@
-// サミット ミナノ分倍河原店のチラシ自動取得・Googleカレンダー登録・LINE日次通知
+// サミット ミナノ分倍河原店のチラシ自動取得・Notion特売カレンダー同期・LINE日次通知
 //
 // 対象店舗（公式）:
 //   https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
-// 店舗名:
-//   サミット ミナノ分倍河原店
 //
 // 必須 Script Properties:
 //   GEMINI_API_KEY
+//   NOTION_API_KEY
+//   NOTION_FLYER_DATABASE_ID
 //   LINE_USER_ID
 //   LINE_CHANNEL_ACCESS_TOKEN
 //
 // 任意 Script Properties:
 //   FLYER_GEMINI_MODEL  既定: gemini-3.5-flash-lite
-//   FLYER_CALENDAR_ID   未設定ならGoogleのデフォルトカレンダー
 //
 // 推奨:
 //   runDailySummitFlyerAutomation を毎日6〜7時台に時間主導型トリガーで実行
 //
-// この機能は1日1回程度の取得を前提としています。サイトへ高頻度アクセスしないでください。
+// 方針:
+//   1. 公式ページ→iframe→公開フォールバックからチラシ候補を取得
+//   2. 新しいチラシだけGemini画像認識
+//   3. Notion「特売カレンダーDB」へ同期
+//   4. Notionから今日の特売を読み直し、LINE通知
+//
+// サイトへ高頻度アクセスしないでください。1日1回程度を前提にしています。
 
 const SUMMIT_FLYER_OFFICIAL_URL = "https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer";
 const SUMMIT_FLYER_TOKUBAI_URL = "https://tokubai.co.jp/%E3%82%B5%E3%83%9F%E3%83%83%E3%83%88/7221";
 const SUMMIT_FLYER_STORE_NAME = "サミット ミナノ分倍河原店";
-const FLYER_CACHE_KEY = "SUMMIT_FLYER_LAST_RESULT_V1";
-const FLYER_SIGNATURE_KEY = "SUMMIT_FLYER_LAST_SIGNATURE_V1";
-const FLYER_EVENT_MARKER = "[SUMMIT_FLYER_AUTOMATION]";
+const FLYER_CACHE_KEY = "SUMMIT_FLYER_LAST_RESULT_V2";
+const FLYER_SIGNATURE_KEY = "SUMMIT_FLYER_LAST_SIGNATURE_V2";
 const FLYER_MAX_IMAGES = 6;
 const FLYER_MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const FLYER_MAX_TOTAL_IMAGE_BYTES = 18 * 1024 * 1024;
 const FLYER_MAX_DEALS_PER_DAY = 12;
+const NOTION_API_VERSION = "2022-06-28";
 
 function runDailySummitFlyerAutomation() {
   Logger.log("--- サミットチラシ自動処理 開始 ---");
 
   const result = getOrAnalyzeSummitFlyer_();
-  syncSummitDealsToCalendar_(result.deals || []);
-  sendTodaySummitDealsToLine_(result.deals || [], result.sourceUrl || SUMMIT_FLYER_OFFICIAL_URL);
+  const syncResult = syncSummitDealsToNotion_(
+    result.deals || [],
+    result.sourceUrl || SUMMIT_FLYER_OFFICIAL_URL,
+    result.flyerSignature || ""
+  );
+  Logger.log(`[Notion同期] 作成=${syncResult.created} 更新=${syncResult.updated} 無効化=${syncResult.disabled}`);
 
-  Logger.log(`解析結果: ${(result.deals || []).length}件 / source=${result.sourceUrl || "unknown"}`);
+  // 通知は解析結果ではなくNotionを読み直す。Notionを特売カレンダーの正本にする。
+  const todayDeals = getTodaySummitDealsFromNotion_();
+  sendTodaySummitDealsToLine_(todayDeals);
+
+  Logger.log(`解析結果: ${(result.deals || []).length}件 / 今日: ${todayDeals.length}件`);
   Logger.log("--- サミットチラシ自動処理 完了 ---");
 }
 
-// 初回確認用。カレンダー更新・LINE送信はせず、解析結果だけログへ出します。
+// 初回確認用。Notion更新・LINE送信はせず、解析結果だけログへ出します。
 function testSummitFlyerParse() {
   const result = analyzeSummitFlyer_(true);
   Logger.log(JSON.stringify(result, null, 2));
 }
 
-// 初回確認用。実際にカレンダー更新とLINE通知まで実行します。
+// 初回確認用。Notion同期とLINE通知まで実行します。
 function testSummitFlyerAutomation() {
   runDailySummitFlyerAutomation();
+}
+
+// Notionの今日分だけを読み、LINE通知だけ試す。
+function testTodaySummitFlyerNotification() {
+  const deals = getTodaySummitDealsFromNotion_();
+  Logger.log(JSON.stringify(deals, null, 2));
+  sendTodaySummitDealsToLine_(deals);
 }
 
 // 一度だけ実行すると、毎日6時台に自動実行するトリガーを作成します。
@@ -85,13 +105,12 @@ function getOrAnalyzeSummitFlyer_() {
 
   const result = analyzeSnapshotWithGemini_(snapshot);
   result.sourceUrl = snapshot.sourceUrl || SUMMIT_FLYER_OFFICIAL_URL;
+  result.flyerSignature = snapshot.signature || "";
   result.reusedCache = false;
 
   if ((result.deals || []).length > 0) {
     writeFlyerCache_(result);
-    if (snapshot.signature) {
-      props.setProperty(FLYER_SIGNATURE_KEY, snapshot.signature);
-    }
+    if (snapshot.signature) props.setProperty(FLYER_SIGNATURE_KEY, snapshot.signature);
     return result;
   }
 
@@ -110,6 +129,7 @@ function analyzeSummitFlyer_(forceRefresh) {
   const snapshot = collectSummitFlyerSnapshot_();
   const result = analyzeSnapshotWithGemini_(snapshot);
   result.sourceUrl = snapshot.sourceUrl || SUMMIT_FLYER_OFFICIAL_URL;
+  result.flyerSignature = snapshot.signature || "";
   return result;
 }
 
@@ -132,8 +152,7 @@ function collectSummitFlyerSnapshot_() {
     imageUrls = imageUrls.concat(extractImageUrls_(official.html, SUMMIT_FLYER_OFFICIAL_URL));
   }
 
-  // 公式側のiframeはJavaScript依存になることがあるため、公開されている同店舗の
-  // トクバイページを低頻度のフォールバックとして使う。
+  // 公式側のiframeがJavaScript依存の場合の低頻度フォールバック。
   if (imageUrls.length < 2) {
     const tokubai = fetchHtml_(SUMMIT_FLYER_TOKUBAI_URL);
     if (tokubai.ok) {
@@ -168,7 +187,7 @@ function fetchHtml_(url) {
       followRedirects: true,
       muteHttpExceptions: true,
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; LINE-Notion-Bot-Flyer/1.0; personal-use)",
+        "User-Agent": "Mozilla/5.0 (compatible; LINE-Notion-Bot-Flyer/2.0; personal-use)",
         "Accept-Language": "ja,en;q=0.8",
       },
     });
@@ -209,10 +228,8 @@ function extractImageUrls_(html, baseUrl) {
 
   const absoluteImageRegex = /https?:\\?\/\\?\/[^\s"'<>]+?\.(?:jpe?g|png|webp)(?:\?[^\s"'<>]*)?/gi;
   while ((match = absoluteImageRegex.exec(html || "")) !== null) {
-    const normalized = match[0].replace(/\\\//g, "/").replace(/&amp;/g, "&");
-    urls.push(normalized);
+    urls.push(match[0].replace(/\\\//g, "/").replace(/&amp;/g, "&"));
   }
-
   return uniqueStrings_(urls);
 }
 
@@ -223,18 +240,13 @@ function normalizeUrl_(url, baseUrl) {
   if (value.startsWith("//")) return "https:" + value;
   if (/^https?:\/\//i.test(value)) return value;
 
-  try {
-    const base = String(baseUrl || "").match(/^(https?):\/\/([^/]+)(\/.*)?$/i);
-    if (!base) return "";
-    const origin = `${base[1]}://${base[2]}`;
-    if (value.startsWith("/")) return origin + value;
-
-    let path = (base[3] || "/").split("?")[0].split("#")[0];
-    path = path.substring(0, path.lastIndexOf("/") + 1);
-    return origin + path + value;
-  } catch (e) {
-    return "";
-  }
+  const base = String(baseUrl || "").match(/^(https?):\/\/([^/]+)(\/.*)?$/i);
+  if (!base) return "";
+  const origin = `${base[1]}://${base[2]}`;
+  if (value.startsWith("/")) return origin + value;
+  let path = (base[3] || "/").split("?")[0].split("#")[0];
+  path = path.substring(0, path.lastIndexOf("/") + 1);
+  return origin + path + value;
 }
 
 function isLikelyFlyerImageUrl_(url) {
@@ -248,7 +260,6 @@ function isLikelyFlyerImageUrl_(url) {
 function fetchCandidateImages_(urls) {
   const results = [];
   let totalBytes = 0;
-
   for (let i = 0; i < urls.length && results.length < FLYER_MAX_IMAGES; i++) {
     const url = urls[i];
     try {
@@ -259,21 +270,18 @@ function fetchCandidateImages_(urls) {
         headers: { "User-Agent": "Mozilla/5.0" },
       });
       if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) continue;
-
       const blob = response.getBlob();
       const bytes = blob.getBytes();
       const contentType = String(blob.getContentType() || "").toLowerCase();
       if (!/^image\/(jpeg|jpg|png|webp)/.test(contentType)) continue;
       if (bytes.length < 15000 || bytes.length > FLYER_MAX_IMAGE_BYTES) continue;
       if (totalBytes + bytes.length > FLYER_MAX_TOTAL_IMAGE_BYTES) break;
-
       totalBytes += bytes.length;
       results.push({ url: url, bytes: bytes, mimeType: contentType.replace("image/jpg", "image/jpeg") });
     } catch (e) {
       Logger.log(`[画像取得失敗] ${url}: ${e}`);
     }
   }
-
   return results;
 }
 
@@ -281,9 +289,7 @@ function analyzeSnapshotWithGemini_(snapshot) {
   const props = PropertiesService.getScriptProperties();
   const apiKey = props.getProperty("GEMINI_API_KEY") || "";
   const model = props.getProperty("FLYER_GEMINI_MODEL") || "gemini-3.5-flash-lite";
-  if (!apiKey) {
-    throw new Error("Script Properties に GEMINI_API_KEY を設定してください。");
-  }
+  if (!apiKey) throw new Error("Script Properties に GEMINI_API_KEY を設定してください。");
 
   const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
   const prompt = [
@@ -292,15 +298,13 @@ function analyzeSnapshotWithGemini_(snapshot) {
     `今日: ${today}`,
     "提供されたWebページ本文とチラシ画像だけを根拠に、特売商品をJSONで抽出してください。",
     "推測で商品名・価格・日付を補わないでください。読めない項目はnullまたは空文字にしてください。",
-    "通常価格ではなく、チラシ上で特売・お買得・日替わり・期間限定と判断できるものを優先してください。",
+    "通常価格ではなく、特売・お買得・日替わり・期間限定と判断できるものを優先してください。",
     "同じ商品が重複する場合は1件にまとめてください。",
     "価格は税込/税抜が分かればnotesへ残してください。",
-    "日付指定が1日だけならstart_date=end_dateにしてください。期間指定なら両方を設定してください。",
-    "月だけ書かれていて年がない場合は、今日とチラシ期間から自然に一意に決められる場合だけ年を補ってください。",
-    "最大40件まで。",
-    "出力は説明文なしのJSONのみ。形式:",
-    '{"deals":[{"product":"商品名","price":"価格表記","unit":"容量・単位","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","notes":"条件や税込/税抜等","priority":1}]}',
-    "priorityは目立つ日替わり/大幅値引き=1、通常の特売=2、長期キャンペーン=3。",
+    "日付指定が1日ならstart_date=end_date、期間指定なら両方を設定してください。",
+    "最大40件まで。説明文なしのJSONのみ。",
+    '{"deals":[{"product":"商品名","price":"価格表記","unit":"容量・単位","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","notes":"条件等","priority":1}]}',
+    "priorityは目立つ日替わり/大幅値引き=1、通常特売=2、長期キャンペーン=3。",
     "",
     "【ページ本文】",
     (snapshot.text || "").slice(0, 26000),
@@ -308,27 +312,17 @@ function analyzeSnapshotWithGemini_(snapshot) {
 
   const parts = [{ text: prompt }];
   (snapshot.images || []).forEach(image => {
-    parts.push({
-      inlineData: {
-        mimeType: image.mimeType,
-        data: Utilities.base64Encode(image.bytes),
-      },
-    });
+    parts.push({ inlineData: { mimeType: image.mimeType, data: Utilities.base64Encode(image.bytes) } });
   });
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const payload = {
-    contents: [{ role: "user", parts: parts }],
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: "application/json",
-    },
-  };
-
   const response = UrlFetchApp.fetch(endpoint, {
     method: "post",
     contentType: "application/json",
-    payload: JSON.stringify(payload),
+    payload: JSON.stringify({
+      contents: [{ role: "user", parts: parts }],
+      generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+    }),
     muteHttpExceptions: true,
   });
 
@@ -341,15 +335,18 @@ function analyzeSnapshotWithGemini_(snapshot) {
   let parsed;
   try {
     const outer = JSON.parse(body);
-    const text = (((outer.candidates || [])[0] || {}).content || {}).parts || [];
-    const joined = text.map(x => x.text || "").join("").trim();
+    const partsOut = (((outer.candidates || [])[0] || {}).content || {}).parts || [];
+    const joined = partsOut.map(x => x.text || "").join("").trim();
     parsed = JSON.parse(stripJsonFence_(joined));
   } catch (e) {
     throw new Error(`GeminiのJSON解析に失敗しました: ${e}`);
   }
 
-  const deals = sanitizeDeals_(parsed.deals || []);
-  return { deals: deals, analyzedAt: new Date().toISOString(), model: model };
+  return {
+    deals: sanitizeDeals_(parsed.deals || []),
+    analyzedAt: new Date().toISOString(),
+    model: model,
+  };
 }
 
 function stripJsonFence_(text) {
@@ -364,13 +361,11 @@ function sanitizeDeals_(items) {
   if (!Array.isArray(items)) return [];
   const seen = {};
   const deals = [];
-
   items.forEach(item => {
     if (!item || !item.product) return;
     const start = normalizeDateString_(item.start_date);
     const end = normalizeDateString_(item.end_date || item.start_date);
     if (!start || !end) return;
-
     const product = String(item.product).trim().slice(0, 120);
     const price = String(item.price || "").trim().slice(0, 80);
     const unit = String(item.unit || "").trim().slice(0, 80);
@@ -379,18 +374,8 @@ function sanitizeDeals_(items) {
     const key = [product, price, unit, start, end].join("|");
     if (seen[key]) return;
     seen[key] = true;
-
-    deals.push({
-      product: product,
-      price: price,
-      unit: unit,
-      start_date: start,
-      end_date: end,
-      notes: notes,
-      priority: priority,
-    });
+    deals.push({ product, price, unit, start_date: start, end_date: end, notes, priority });
   });
-
   return deals.slice(0, 40);
 }
 
@@ -398,111 +383,229 @@ function normalizeDateString_(value) {
   const text = String(value || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "";
   const date = new Date(text + "T00:00:00+09:00");
-  if (isNaN(date.getTime())) return "";
-  return text;
+  return isNaN(date.getTime()) ? "" : text;
 }
 
-function syncSummitDealsToCalendar_(deals) {
-  const calendar = getFlyerCalendar_();
-  const grouped = groupDealsByDate_(deals);
-  const dates = Object.keys(grouped).sort();
+// ------------------------------
+// Notion 特売カレンダー
+// ------------------------------
 
-  dates.forEach(dateStr => {
-    const date = new Date(dateStr + "T00:00:00+09:00");
-    const dayDeals = grouped[dateStr]
-      .sort((a, b) => a.priority - b.priority || a.product.localeCompare(b.product, "ja"))
-      .slice(0, FLYER_MAX_DEALS_PER_DAY);
+function getFlyerNotionConfig_() {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty("NOTION_API_KEY") || "";
+  const databaseId = props.getProperty("NOTION_FLYER_DATABASE_ID") || "";
+  if (!apiKey || !databaseId) {
+    throw new Error("Script Properties に NOTION_API_KEY と NOTION_FLYER_DATABASE_ID を設定してください。");
+  }
+  return { apiKey, databaseId };
+}
 
-    // 自動作成した同日の古いイベントだけ消して更新する。
-    calendar.getEventsForDay(date).forEach(event => {
-      if ((event.getDescription() || "").indexOf(FLYER_EVENT_MARKER) >= 0) {
-        event.deleteEvent();
-      }
-    });
+function notionHeaders_() {
+  const config = getFlyerNotionConfig_();
+  return {
+    Authorization: `Bearer ${config.apiKey}`,
+    "Notion-Version": NOTION_API_VERSION,
+    "Content-Type": "application/json",
+  };
+}
 
-    const title = `🛒 サミット特売（${dayDeals.length}件）`;
-    const description = buildCalendarDescription_(dateStr, dayDeals);
-    calendar.createAllDayEvent(title, date, { description: description });
+function notionRequest_(url, method, payload) {
+  const options = {
+    method: method || "get",
+    headers: notionHeaders_(),
+    muteHttpExceptions: true,
+  };
+  if (payload !== undefined && payload !== null) {
+    options.contentType = "application/json";
+    options.payload = JSON.stringify(payload);
+  }
+  const response = UrlFetchApp.fetch(url, options);
+  const code = response.getResponseCode();
+  const body = response.getContentText();
+  if (code < 200 || code >= 300) {
+    throw new Error(`Notion API failed: ${code} ${body.slice(0, 700)}`);
+  }
+  return body ? JSON.parse(body) : {};
+}
+
+function queryAllFlyerPages_() {
+  const config = getFlyerNotionConfig_();
+  let cursor = null;
+  const pages = [];
+  do {
+    const payload = { page_size: 100 };
+    if (cursor) payload.start_cursor = cursor;
+    const data = notionRequest_(
+      `https://api.notion.com/v1/databases/${config.databaseId}/query`,
+      "post",
+      payload
+    );
+    pages.push.apply(pages, data.results || []);
+    cursor = data.has_more ? data.next_cursor : null;
+  } while (cursor && pages.length < 500);
+  return pages;
+}
+
+function syncSummitDealsToNotion_(deals, sourceUrl, flyerSignature) {
+  const config = getFlyerNotionConfig_();
+  const nowIso = new Date().toISOString();
+  const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
+  const existing = queryAllFlyerPages_();
+  const byKey = {};
+  const activeStorePages = [];
+
+  existing.forEach(page => {
+    const props = page.properties || {};
+    const key = notionRichText_(props["識別キー"]);
+    if (key) byKey[key] = page;
+    const store = notionSelect_(props["店舗"]);
+    const active = notionCheckbox_(props["有効"], true);
+    if (store === SUMMIT_FLYER_STORE_NAME && active) activeStorePages.push(page);
   });
 
-  // 過去7日〜未来31日のうち、現在の解析結果に存在しない自動イベントを掃除する。
-  cleanupObsoleteFlyerEvents_(calendar, grouped);
-}
-
-function getFlyerCalendar_() {
-  const calendarId = PropertiesService.getScriptProperties().getProperty("FLYER_CALENDAR_ID") || "";
-  if (!calendarId) return CalendarApp.getDefaultCalendar();
-  const calendar = CalendarApp.getCalendarById(calendarId);
-  if (!calendar) throw new Error("FLYER_CALENDAR_ID のGoogleカレンダーが見つかりません。");
-  return calendar;
-}
-
-function groupDealsByDate_(deals) {
-  const grouped = {};
-  const today = new Date();
-  const minDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const maxDate = new Date(today.getTime() + 31 * 24 * 60 * 60 * 1000);
+  const currentKeys = {};
+  let created = 0;
+  let updated = 0;
 
   (deals || []).forEach(deal => {
-    let cursor = new Date(deal.start_date + "T00:00:00+09:00");
-    const end = new Date(deal.end_date + "T00:00:00+09:00");
-    let guard = 0;
-    while (cursor <= end && guard < 40) {
-      if (cursor >= minDate && cursor <= maxDate) {
-        const dateStr = Utilities.formatDate(cursor, "Asia/Tokyo", "yyyy-MM-dd");
-        grouped[dateStr] = grouped[dateStr] || [];
-        grouped[dateStr].push(deal);
-      }
-      cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
-      guard++;
+    const keyRaw = [SUMMIT_FLYER_STORE_NAME, deal.product, deal.price, deal.unit, deal.start_date, deal.end_date].join("|");
+    const key = sha256Hex_(keyRaw);
+    currentKeys[key] = true;
+
+    const properties = buildFlyerNotionProperties_(deal, sourceUrl, flyerSignature, key, nowIso);
+    const existingPage = byKey[key];
+    if (existingPage) {
+      notionRequest_(`https://api.notion.com/v1/pages/${existingPage.id}`, "patch", { properties: properties });
+      updated++;
+    } else {
+      notionRequest_("https://api.notion.com/v1/pages", "post", {
+        parent: { database_id: config.databaseId },
+        properties: properties,
+      });
+      created++;
     }
   });
 
-  return grouped;
-}
-
-function buildCalendarDescription_(dateStr, deals) {
-  const lines = [
-    FLYER_EVENT_MARKER,
-    `${SUMMIT_FLYER_STORE_NAME} / ${dateStr}`,
-    "",
-  ];
-  deals.forEach(deal => {
-    let line = `・${deal.product}`;
-    if (deal.price) line += ` ${deal.price}`;
-    if (deal.unit) line += ` / ${deal.unit}`;
-    lines.push(line);
-    if (deal.notes) lines.push(`  ${deal.notes}`);
+  // 新しいチラシへ切り替わったとき、今日以降に残る旧チラシ行を無効化する。
+  let disabled = 0;
+  activeStorePages.forEach(page => {
+    const props = page.properties || {};
+    const key = notionRichText_(props["識別キー"]);
+    if (currentKeys[key]) return;
+    const range = notionDateRange_(props["特売日"]);
+    if (!range.end || range.end < today) return;
+    notionRequest_(`https://api.notion.com/v1/pages/${page.id}`, "patch", {
+      properties: {
+        "有効": { checkbox: false },
+        "更新日時": { date: { start: nowIso } },
+      },
+    });
+    disabled++;
   });
-  lines.push("", `公式: ${SUMMIT_FLYER_OFFICIAL_URL}`, `参考: ${SUMMIT_FLYER_TOKUBAI_URL}`);
-  lines.push("価格・在庫は店頭表示を優先してください。");
-  return lines.join("\n");
+
+  return { created, updated, disabled };
 }
 
-function cleanupObsoleteFlyerEvents_(calendar, grouped) {
-  const start = new Date();
-  start.setDate(start.getDate() - 7);
-  const end = new Date();
-  end.setDate(end.getDate() + 32);
+function buildFlyerNotionProperties_(deal, sourceUrl, flyerSignature, key, nowIso) {
+  const dateObj = { start: deal.start_date };
+  if (deal.end_date && deal.end_date !== deal.start_date) dateObj.end = deal.end_date;
 
-  calendar.getEvents(start, end).forEach(event => {
-    if ((event.getDescription() || "").indexOf(FLYER_EVENT_MARKER) < 0) return;
-    const dateStr = Utilities.formatDate(event.getStartTime(), "Asia/Tokyo", "yyyy-MM-dd");
-    if (!grouped[dateStr]) {
-      event.deleteEvent();
-    }
-  });
+  return {
+    "商品名": { title: [{ text: { content: deal.product || "特売商品" } }] },
+    "特売日": { date: dateObj },
+    "価格": { rich_text: richTextContent_(deal.price) },
+    "容量・単位": { rich_text: richTextContent_(deal.unit) },
+    "店舗": { select: { name: SUMMIT_FLYER_STORE_NAME } },
+    "備考": { rich_text: richTextContent_(deal.notes) },
+    "優先度": { number: Number(deal.priority || 2) },
+    "チラシURL": { url: sourceUrl || SUMMIT_FLYER_OFFICIAL_URL },
+    "チラシ識別": { rich_text: richTextContent_(flyerSignature || "") },
+    "識別キー": { rich_text: richTextContent_(key) },
+    "有効": { checkbox: true },
+    "更新日時": { date: { start: nowIso } },
+  };
 }
 
-function sendTodaySummitDealsToLine_(deals, sourceUrl) {
+function richTextContent_(value) {
+  const text = String(value || "").slice(0, 1800);
+  return text ? [{ text: { content: text } }] : [];
+}
+
+function getTodaySummitDealsFromNotion_() {
   const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
-  const todaysDeals = (deals || []).filter(deal => deal.start_date <= today && deal.end_date >= today)
+  const pages = queryAllFlyerPages_();
+  const deals = [];
+
+  pages.forEach(page => {
+    const props = page.properties || {};
+    if (notionSelect_(props["店舗"]) !== SUMMIT_FLYER_STORE_NAME) return;
+    if (!notionCheckbox_(props["有効"], true)) return;
+    const range = notionDateRange_(props["特売日"]);
+    if (!range.start) return;
+    const end = range.end || range.start;
+    if (range.start > today || end < today) return;
+
+    deals.push({
+      product: notionTitle_(props["商品名"]) || "特売商品",
+      price: notionRichText_(props["価格"]),
+      unit: notionRichText_(props["容量・単位"]),
+      notes: notionRichText_(props["備考"]),
+      priority: notionNumber_(props["優先度"], 2),
+      start_date: range.start,
+      end_date: end,
+      sourceUrl: notionUrl_(props["チラシURL"]) || SUMMIT_FLYER_OFFICIAL_URL,
+    });
+  });
+
+  return deals
     .sort((a, b) => a.priority - b.priority || a.product.localeCompare(b.product, "ja"))
     .slice(0, FLYER_MAX_DEALS_PER_DAY);
+}
 
+function notionTitle_(prop) {
+  if (!prop || !Array.isArray(prop.title)) return "";
+  return prop.title.map(x => x.plain_text || (x.text || {}).content || "").join("");
+}
+
+function notionRichText_(prop) {
+  if (!prop || !Array.isArray(prop.rich_text)) return "";
+  return prop.rich_text.map(x => x.plain_text || (x.text || {}).content || "").join("");
+}
+
+function notionSelect_(prop) {
+  return prop && prop.select ? String(prop.select.name || "") : "";
+}
+
+function notionCheckbox_(prop, fallback) {
+  return prop && typeof prop.checkbox === "boolean" ? prop.checkbox : Boolean(fallback);
+}
+
+function notionNumber_(prop, fallback) {
+  return prop && typeof prop.number === "number" ? prop.number : Number(fallback || 0);
+}
+
+function notionUrl_(prop) {
+  return prop && prop.url ? String(prop.url) : "";
+}
+
+function notionDateRange_(prop) {
+  if (!prop || !prop.date) return { start: "", end: "" };
+  return {
+    start: String(prop.date.start || "").slice(0, 10),
+    end: String(prop.date.end || prop.date.start || "").slice(0, 10),
+  };
+}
+
+// ------------------------------
+// LINE通知
+// ------------------------------
+
+function sendTodaySummitDealsToLine_(todaysDeals) {
+  const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
   const lines = [`🛒 ${SUMMIT_FLYER_STORE_NAME}`, `【${today} の特売】`, ""];
-  if (todaysDeals.length === 0) {
-    lines.push("今日の特売商品をチラシから抽出できませんでした。", "店舗チラシを直接確認してください。");
+
+  if (!todaysDeals || todaysDeals.length === 0) {
+    lines.push("今日の特売商品はNotionに登録されていません。", "必要なら店舗チラシを直接確認してください。");
   } else {
     todaysDeals.forEach(deal => {
       let line = `・${deal.product}`;
@@ -511,6 +614,7 @@ function sendTodaySummitDealsToLine_(deals, sourceUrl) {
       lines.push(line);
       if (deal.notes) lines.push(`  ${deal.notes}`);
     });
+    lines.push("", `今日の登録: ${todaysDeals.length}件`);
   }
   lines.push("", `チラシ: ${SUMMIT_FLYER_OFFICIAL_URL}`);
   lines.push("※価格・在庫は店頭表示を優先してください。");
@@ -530,10 +634,7 @@ function pushFlyerTextToLine_(text) {
     method: "post",
     contentType: "application/json",
     headers: { Authorization: `Bearer ${accessToken}` },
-    payload: JSON.stringify({
-      to: userId,
-      messages: [{ type: "text", text: text }],
-    }),
+    payload: JSON.stringify({ to: userId, messages: [{ type: "text", text: text }] }),
     muteHttpExceptions: true,
   });
 
@@ -543,15 +644,19 @@ function pushFlyerTextToLine_(text) {
   }
 }
 
+// ------------------------------
+// キャッシュ・共通処理
+// ------------------------------
+
 function writeFlyerCache_(result) {
   const compact = {
     deals: (result.deals || []).slice(0, 40),
     sourceUrl: result.sourceUrl || SUMMIT_FLYER_OFFICIAL_URL,
     analyzedAt: result.analyzedAt || new Date().toISOString(),
     model: result.model || "",
+    flyerSignature: result.flyerSignature || "",
   };
   const json = JSON.stringify(compact);
-  // Script Propertyのサイズを超えないように、超過時は件数を減らして保存。
   if (json.length <= 8500) {
     PropertiesService.getScriptProperties().setProperty(FLYER_CACHE_KEY, json);
     return;
