@@ -10,57 +10,100 @@ LINEを入口に、家計簿・予算・カード利用通知・固定費/サブ
 - `UI_DESIGN.md`: LINE UIとPostback設計ルール
 - `PHASE1_TEST.md`: カード自動化テスト
 - `PHASE2_TEST.md`: 月次・予算判断テスト
-- `FLYER_TEST.md`: サミットチラシ自動化テスト
+- `FLYER_TEST.md`: サミットチラシ自動化・確認フローテスト
 - `gas/README.md`: GAS固有設定
 
 機能変更時はREADME.md / SETUP.md / DEVELOPMENT.mdを更新し、UI変更時はUI_DESIGN.mdも更新します。
 
 ---
 
-# サミット特売Notionカレンダー・毎日通知
+# サミット特売Notionカレンダー・チラシ一覧・毎日通知
 
 対象店舗:
 
 ```text
 サミット ミナノ分倍河原店
-https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
+公式: https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
+Shufoo一覧: https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
 ```
 
-`gas/FlyerDeals.gs` 1ファイルで次を自動化します。
+Apps Scriptの3ファイルで動きます。
 
 ```text
-サミット公式店舗ページを確認
-↓
-チラシiframe / 画像候補を取得
-↓
-必要時のみ公開フォールバックを利用
-↓
-新しいチラシだけGeminiで画像認識
-↓
-商品名・価格・容量・対象日を構造化
-↓
-Notion特売カレンダーDBへ同期
-↓
-Notionから今日の特売を読み直す
-↓
-当日の特売をLINEへ毎朝通知
+gas/FlyerDeals.gs
+  → 公式/iframe/画像取得、共通Notion/LINE処理
+
+gas/FlyerReview.gs
+  → Shufooチラシ一覧、月間/週次/日替わり判定、画像ごとの解析、確認待ち登録
+
+gas/FlyerReviewedNotify.gs
+  → 確認済みチラシだけを毎朝LINE通知
 ```
 
-Googleカレンダーは使用しません。Notion DBが特売情報の正本です。
+処理:
 
-Notionでは`特売日`をDateプロパティにし、カレンダービューで確認します。期間特売はDateの開始〜終了として1ページで管理します。
+```text
+Shufooチラシ一覧 + 公式ページを確認
+↓
+新しい画像・チラシだけGeminiで画像認識
+↓
+チラシ単位に「月間 / 週次 / 日替わり / その他」を判定
+↓
+Notion「チラシ一覧」へ
+  チラシ名 / 掲載期間 / 元URL / 画像URL / 抽出サマリーを保存
+↓
+商品をNotion「特売カレンダー」へ確認待ちで保存
+↓
+画像と抽出結果を人が確認
+↓
+チラシ一覧の確認状態を「確認済み」に変更
+↓
+そのチラシの商品だけ有効化
+↓
+確認済みの今日の特売だけLINEへ毎朝通知
+```
 
-同じ `店舗 + 商品 + 価格 + 容量 + 特売期間` は `識別キー` で重複を防ぎます。新しいチラシへ切り替わった場合、今日以降に残る旧チラシ行は `有効=false` にし、過去分は履歴として残します。
+月初から月末近くまで有効な長期チラシは `月間` として扱います。月間チラシと週次・日替わりチラシは同時に保持できます。
 
-同じチラシが続く間は保存済み解析結果を再利用し、毎日同じ画像をGeminiへ送り直しません。
+## Notion「チラシ一覧」
 
-初回設定・テストは `FLYER_TEST.md` を参照してください。
+主な項目:
+
+| 名前 | 型 |
+|---|---|
+| `チラシ名` | Title |
+| `種別` | Select (`月間/週次/日替わり/その他`) |
+| `掲載期間` | Date |
+| `元URL` | URL |
+| `画像URL` | URL |
+| `画像一覧` | Rich text |
+| `抽出件数` | Number |
+| `抽出サマリー` | Rich text |
+| `確認状態` | Select (`確認待ち/確認済み/要修正`) |
+| `チラシ識別` | Rich text |
+| `取得日時` | Date |
+
+Notionには `確認待ち` ビューと `月間チラシ` ビューを作成済みです。
+
+## Notion「特売カレンダー」
+
+従来項目に加えて:
+
+| 名前 | 型 |
+|---|---|
+| `元チラシ名` | Rich text |
+| `元画像URL` | URL |
+| `確認状態` | Select |
+
+を持ちます。
+
+新規解析商品は最初 `有効=false / 確認待ち` です。チラシ一覧を `確認済み` にしたものだけ `有効=true` になり、カレンダー・LINE通知へ採用されます。
+
+Googleカレンダーは使いません。Notionが正本です。
 
 ---
 
 # 迷ったときの案内
-
-従来の長いヘルプ一覧ではなく、目的と状況からコマンドを探せます。
 
 ```text
 ？
@@ -74,8 +117,6 @@ Notionでは`特売日`をDateプロパティにし、カレンダービュー�
 - `おすすめ`: 現在の状態を見て最大3件提案
 - `何したい ○○`: 自由文から関連コマンドを提案
 - `コマンド`: 全コマンドを一覧表示
-
-`おすすめ` と `何したい` はGeminiを使わずPythonのルール判定で動きます。
 
 ---
 
@@ -119,9 +160,7 @@ AI改善
 
 状態: **実装完了・要実機確認**
 
-量が多いため、Phase 2は3ブロックに分割しています。
-
-## Phase 2A — 日々の家計判断
+## Phase 2A
 
 ```text
 今日使える
@@ -129,9 +168,7 @@ AI改善
 異常支出
 ```
 
-追加DBは不要です。
-
-## Phase 2B — 月次判断
+## Phase 2B
 
 ```text
 予算提案
@@ -143,9 +180,7 @@ AI改善
 月次レビュー YYYY-MM
 ```
 
-月締めは終了済みの月だけ対象です。通常の`月締め確定`はカード未処理があると停止します。
-
-## Phase 2C — 将来予測・目標
+## Phase 2C
 
 ```text
 年間予測
@@ -157,45 +192,6 @@ AI改善
 
 ---
 
-# Phase 2で追加するNotion設定
-
-月別管理DBへ:
-
-| 名前 | 型 |
-|---|---|
-| `締め済み` | Checkbox |
-| `締め日時` | Date |
-| `確定支出` | Number |
-
-貯金目標DB:
-
-| 名前 | 型 |
-|---|---|
-| `目標名` | Title |
-| `目標額` | Number |
-| `現在額` | Number |
-| `期限` | Date |
-| `有効` | Checkbox |
-
-特売カレンダーDB:
-
-| 名前 | 型 |
-|---|---|
-| `商品名` | Title |
-| `特売日` | Date |
-| `価格` | Rich text |
-| `容量・単位` | Rich text |
-| `店舗` | Select |
-| `備考` | Rich text |
-| `優先度` | Number |
-| `チラシURL` | URL |
-| `チラシ識別` | Rich text |
-| `識別キー` | Rich text |
-| `有効` | Checkbox |
-| `更新日時` | Date |
-
----
-
 # AIモデル切替
 
 ```text
@@ -204,13 +200,11 @@ AI Flash  → gemini-3.6-flash
 AI Model  → 現在モデル確認
 ```
 
-既定はLiteです。月次レビューも選択中モデルを使います。
+既定はLiteです。
 
 ---
 
 # Phase 1 — カード自動化
-
-カード会社メールをGASで検出し、未処理キューへ保存してLINEから分類できます。
 
 主な機能:
 - 過去分類からおすすめジャンル表示
@@ -218,31 +212,24 @@ AI Model  → 現在モデル確認
 - 条件を満たした店の安全な自動登録
 - 家計簿DBとの重複確認
 - 店名変更
-- サブスクを固定費DBへ登録し次回以降検出除外
+- サブスク→固定費DB→次回検出除外
 - 月末未処理チェック
-- `カードテスト`によるテスト用未処理作成
-
-自動登録条件:
-
-```text
-同じ店を同じジャンルへ3回以上手動分類
-AND 一致率100%
-AND 本人が自動登録ON
-```
 
 ---
 
 # GAS推奨トリガー
 
 ```text
-checkCardEmails                    → 1時間ごと
-runDailySummitFlyerAutomation      → 毎日 朝6時台
-sendDailyMemoReminder              → 毎日 朝8時ごろ
-sendDailyBudgetAlert               → 毎日 20時ごろ
-sendDailyCardPendingReminder       → 毎日 20〜21時ごろ
-sendMonthEndCardCheck              → 毎日 21時ごろ
-sendWeeklyFinanceReport            → 毎週日曜 20時ごろ
+checkCardEmails                              → 1時間ごと
+runDailySummitFlyerCatalogReviewedAutomation → 毎日 朝6時台
+sendDailyMemoReminder                        → 毎日 朝8時ごろ
+sendDailyBudgetAlert                         → 毎日 20時ごろ
+sendDailyCardPendingReminder                 → 毎日 20〜21時ごろ
+sendMonthEndCardCheck                        → 毎日 21時ごろ
+sendWeeklyFinanceReport                      → 毎週日曜 20時ごろ
 ```
+
+チラシの旧トリガーは `installDailySummitFlyerReviewedTrigger` で削除されます。
 
 ---
 
@@ -252,7 +239,7 @@ Phase 1: `PHASE1_TEST.md`
 
 Phase 2: `PHASE2_TEST.md`
 
-チラシ自動化: `FLYER_TEST.md`
+チラシ: `FLYER_TEST.md`
 
 障害対応: `MAINTENANCE.md`
 
