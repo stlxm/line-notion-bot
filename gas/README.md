@@ -6,7 +6,7 @@ GASはカード監視・定期通知・サミットのチラシ取得を担当�
 
 ```text
 gas/Code.gs                  カード利用メール監視
-gas/FinanceReports.gs        家計簿定期通知
+gas/FinanceReports.gs        家計簿定期通知 + 毎月1日の予算設定案内
 gas/DailyMemo.gs             メモ通知
 gas/FlyerDeals.gs            共通Web/Notion/LINE処理 + 今日の特売通知
 gas/FlyerLifeCalendar.gs     Shufoo配信ID検出・個別解析・確認フロー・生活カレンダー同期
@@ -39,6 +39,65 @@ NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```text
 FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 ```
+
+秘密値は `.gs` ファイルへ直書きしません。
+
+---
+
+# 毎月1日の予算設定案内
+
+実装:
+
+```text
+gas/FinanceReports.gs
+```
+
+通知本体:
+
+```text
+sendMonthlyBudgetNotice
+```
+
+毎月1日朝6時台に次のFlexをLINEへ送ります。
+
+```text
+📅 毎月の予算設定
+今月の全体予算を設定しますか？
+
+[設定する]
+[後でする]
+```
+
+`設定する` のPostback:
+
+```text
+action=start_monthly_budget_input
+```
+
+Render側の既存予算入力処理へ接続します。
+
+手動テスト:
+
+```text
+testMonthlyBudgetNotice
+```
+
+旧名互換:
+
+```text
+triggerMonthlyBudgetNotice
+testMonthlyNotice
+```
+
+トリガー作成:
+
+```text
+installMonthlyBudgetNoticeTrigger
+```
+
+この関数は `sendMonthlyBudgetNotice` の既存トリガーを削除してから、毎月1日6時台のトリガーを1つだけ作成します。
+
+Apps Scriptプロジェクトのタイムゾーンは `Asia/Tokyo` にしてください。
 
 ---
 
@@ -98,7 +157,7 @@ LINE push共通関数
 
 # LINE通知
 
-通知対象:
+チラシ通知対象:
 
 ```text
 店舗 = サミット ミナノ分倍河原店
@@ -115,91 +174,34 @@ LINE push共通関数
 📅 月間・長期特売 = 8日以上
 ```
 
-通知上限は20件です。
-
-2026-09-12の実機では:
-
-```text
-元=114件
-重複整理後=68件
-```
-
-短期商品が月間商品より先に通知されることを確認済みです。表記揺れ重複も通知時に整理します。
-
-一部の強い言い換え重複は残る場合がありますが、誤統合防止を優先し、Notion元データは自動削除しません。
+通知上限は20件です。Notion元データは自動削除しません。
 
 ---
 
-# Notion確認フロー
-
-```text
-新しい配信ID
-↓
-チラシ一覧 = 確認待ち
-生活カレンダー = 確認待ち / 有効=false
-↓
-人が画像と抽出結果を確認
-↓
-確認済み
-↓
-applyLifeFlyerReviewsNow または日次処理
-↓
-確認済み配信ID由来だけ有効=true
-```
-
----
-
-# テスト関数
-
-配信IDのみ:
+# チラシテスト関数
 
 ```text
 testSummitShufooDeliveryIds
-```
-
-解析:
-
-```text
 testSummitLifeFlyerParse
-```
-
-同期:
-
-```text
 testSummitLifeFlyerSync
-```
-
-通知:
-
-```text
 testTodaySummitFlyerNotification
-```
-
-レビュー反映:
-
-```text
 applyLifeFlyerReviewsNow
 ```
 
 ---
 
-# 最終日次トリガー
-
-インストール関数:
+# 推奨トリガー
 
 ```text
-installDailySummitLifeCalendarTrigger
+checkCardEmails                         1時間ごと
+sendMonthlyBudgetNotice                 毎月1日6時台
+runDailySummitLifeCalendarAutomation    毎日6時台
+sendDailyMemoReminder                   毎日8時ごろ
+sendDailyBudgetAlert                    毎日20時ごろ
+sendDailyCardPendingReminder            毎日20〜21時ごろ
+sendMonthEndCardCheck                   毎日21時ごろ
+sendWeeklyFinanceReport                 毎週日曜20時ごろ
 ```
-
-日次入口:
-
-```text
-runDailySummitLifeCalendarAutomation
-```
-
-**2026-09-12、Apps Scriptのトリガー画面で `runDailySummitLifeCalendarAutomation` が登録済みであることを実機確認済みです。**
-
-通常はこのトリガーをそのまま運用し、問題が起きたときだけ手動テストします。
 
 ---
 
@@ -207,29 +209,38 @@ runDailySummitLifeCalendarAutomation
 
 GitHubの`.gs`更新はApps Scriptへ自動反映されません。
 
-チラシ機能でコピーするのは:
+今回の毎月予算通知を使う場合は、GitHub最新版の:
+
+```text
+gas/FinanceReports.gs
+```
+
+をApps Scriptへ丸ごと反映してください。
+
+チラシ機能は:
 
 ```text
 gas/FlyerDeals.gs
 gas/FlyerLifeCalendar.gs
 ```
 
-一部だけの手修正ではなく、原則GitHub最新版をファイル単位で丸ごと反映します。
+を反映します。
 
 ---
 
 # トラブルシューティング
 
-LINE通知0件:
-- チラシ一覧が `確認済み` か
-- 生活カレンダーが `種類=特売 / 確認状態=確認済み / 有効=true` か
-- 今日が `日付` の範囲内か
+毎月予算通知が届かない:
+- `testMonthlyBudgetNotice` を実行
+- `LINE_USER_ID` / `LINE_CHANNEL_ACCESS_TOKEN` がScript Propertiesにあるか確認
+- Apps Scriptのタイムゾーンを確認
+- トリガー画面で `sendMonthlyBudgetNotice` を確認
 
-短期商品が通知されない:
-- `testTodaySummitFlyerNotification` を実行
-- `[Notion今日分]` の元件数/重複整理後件数を確認
+`設定する` を押しても進まない:
+- LINE WebhookがRender `/callback` へ届いているか確認
+- Renderが起動しているか確認
+- `action=start_monthly_budget_input` のPostback処理が動作しているか確認
 
-配信ID・解析異常:
+チラシ異常:
 - まず `testSummitShufooDeliveryIds`
-- 必要時だけ `testSummitLifeFlyerParse` / `testSummitLifeFlyerSync`
-- Gemini無料枠を消費するため連続実行しない
+- 必要時だけGemini解析テストを実行
