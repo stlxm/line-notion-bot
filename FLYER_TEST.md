@@ -1,6 +1,6 @@
 # FLYER_TEST.md
 
-サミット ミナノ分倍河原店の通常チラシ・月間チラシ・Notion確認フロー・LINE日次通知の実機確認手順です。
+サミット ミナノ分倍河原店の通常チラシ・月間チラシ・Notion確認フロー・生活カレンダー・LINE日次通知の実機確認手順です。
 
 対象:
 
@@ -20,17 +20,18 @@ GitHubのGASファイルはApps Scriptへ自動反映されません。
 
 ```text
 gas/FlyerDeals.gs
-gas/FlyerReview.gs
-gas/FlyerReviewedNotify.gs
+gas/FlyerLifeCalendar.gs
 ```
 
-3ファイルを同じApps Scriptプロジェクトへ置きます。
+この2ファイルを同じApps Scriptプロジェクトへ置きます。
+
+`FlyerReview.gs` / `FlyerReviewedNotify.gs` は途中版なのでコピーしません。
 
 ---
 
 # 2. Notion DB
 
-## 特売カレンダー
+## 生活カレンダー
 
 Database ID:
 
@@ -38,11 +39,27 @@ Database ID:
 684f959e451047389505a95ed368a7d6
 ```
 
-主な項目:
+共通項目:
 
 ```text
-商品名
-特売日
+予定名
+日付
+種類
+金額
+内容
+有効
+更新日時
+```
+
+種類:
+
+```text
+特売 / 家計 / 引き落とし / 給料 / メモ / 予定 / その他
+```
+
+チラシ由来の特売では以下も使います。
+
+```text
 価格
 容量・単位
 店舗
@@ -51,14 +68,12 @@ Database ID:
 チラシURL
 チラシ識別
 識別キー
-有効
-更新日時
 元チラシ名
 元画像URL
 確認状態
 ```
 
-`特売日`のカレンダービューは作成済みで、`有効=true`を表示します。
+ビュー `生活カレンダー` は `日付` を基準に `有効=true` を表示します。
 
 ## チラシ一覧
 
@@ -108,6 +123,8 @@ LINE_USER_ID
 LINE_CHANNEL_ACCESS_TOKEN
 ```
 
+`NOTION_FLYER_DATABASE_ID` は名前を互換維持していますが、現在は生活カレンダーDBを指します。
+
 任意:
 
 ```text
@@ -124,17 +141,17 @@ Apps Scriptタイムゾーン:
 
 ---
 
-# 4. チラシ一覧・画像取得テスト
+# 4. 画像取得・解析だけテスト
 
 最初に:
 
 ```text
-testSummitFlyerCatalogParse
+testSummitLifeFlyerParse
 ```
 
 を実行します。
 
-この段階ではNotionの確認状態を変更しません。
+この段階ではNotionへ登録しません。
 
 実行ログで確認:
 
@@ -143,10 +160,10 @@ imageUrls
 flyers
 ```
 
-最低確認項目:
+確認項目:
 
 ```text
-[ ] Shufoo/公式からチラシ画像URLが1件以上取得できる
+[ ] チラシ画像URLが1件以上取得できる
 [ ] flyers が1件以上ある
 [ ] チラシ名が画像/ページと対応している
 [ ] 掲載期間が画像/ページと対応している
@@ -154,44 +171,43 @@ flyers
 [ ] dealの image_url が元画像と対応している
 ```
 
-重要: このテストが成功するまでは自動トリガーを作りません。
+ここが通るまでは自動トリガーを作りません。
 
 ---
 
 # 5. 月間チラシ確認
 
-月初の1か月チラシが掲載されている時期にログを確認します。
-
-期待:
+月初の1か月チラシが掲載されている場合:
 
 ```text
 type = 月間
 ```
 
-目安として掲載期間20日以上を月間扱いします。
+になることを確認します。
+
+目安:
+
+```text
+20日以上 → 月間
+4日以上  → 週次
+1〜2日   → 日替わり
+```
 
 確認:
 
 ```text
-[ ] 月初〜月末近くまでのチラシが別チラシとして取得される
-[ ] type が 月間 になっている
-[ ] start_date / end_date がチラシ記載期間と一致する
-[ ] 月間チラシの商品が週次チラシと混同されていない
+[ ] 月間チラシが別チラシとして取得される
+[ ] start_date / end_date が画像記載期間と一致する
+[ ] 月間チラシ商品が週次/日替わりと混同されていない
 ```
-
-チラシ側に期間が読めない場合は、無理に月間と推測して登録しない設計です。
 
 ---
 
 # 6. Notionへ確認待ちで同期
 
-次に:
-
 ```text
-testSummitFlyerCatalogAutomation
+testSummitLifeFlyerSync
 ```
-
-を実行します。
 
 期待:
 
@@ -199,12 +215,11 @@ testSummitFlyerCatalogAutomation
 チラシ一覧
   確認状態 = 確認待ち
 
-特売カレンダー
+生活カレンダー
+  種類 = 特売
   確認状態 = 確認待ち
   有効 = false
 ```
-
-この時点では読み取り結果はまだ信用済みにしません。
 
 ---
 
@@ -219,7 +234,7 @@ Notionで:
 
 を開きます。
 
-各チラシについて比較:
+比較:
 
 ```text
 画像URL / 画像一覧
@@ -234,9 +249,9 @@ Notionで:
 確認ポイント:
 
 ```text
-[ ] チラシ画像が正しい店舗のもの
+[ ] 正しい店舗のチラシ画像
 [ ] チラシ名が合っている
-[ ] 月間/週次/日替わりの分類が妥当
+[ ] 月間/週次/日替わり分類が妥当
 [ ] 掲載期間が合っている
 [ ] 抽出商品が画像に実在する
 [ ] 価格が合っている
@@ -256,59 +271,49 @@ Notionで:
 確認状態 → 要修正
 ```
 
-にします。
-
 ---
 
-# 8. 確認状態を商品へ反映
+# 8. 確認状態を生活カレンダーへ反映
 
-Notionで状態変更後、Apps Scriptから:
+Notionで状態変更後:
 
 ```text
-applyFlyerReviewsNow
+applyLifeFlyerReviewsNow
 ```
-
-を実行します。
 
 期待:
 
 確認済みチラシ由来:
 
 ```text
+種類 = 特売
 確認状態 = 確認済み
 有効 = true
 ```
 
-要修正チラシ由来:
+要修正:
 
 ```text
 確認状態 = 要修正
 有効 = false
 ```
 
-確認待ち:
-
-```text
-有効 = false
-```
-
-のままです。
+確認待ちは `有効=false` のままです。
 
 ---
 
-# 9. 確認済み商品のLINE通知テスト
+# 9. LINE通知テスト
 
 ```text
-testTodayConfirmedSummitFlyerNotification
+testTodayLifeCalendarFlyerNotification
 ```
 
 期待:
-- 今日が対象日の商品だけ届く。
+- 今日が対象日の特売だけ届く。
+- `種類=特売` だけ届く。
 - `確認済み` だけ届く。
-- `確認待ち` / `要修正` は通知されない。
-- `有効=false` は通知されない。
-
-月間チラシと週次チラシの両方に今日の特売があれば、確認済みの両方から候補が入ります。
+- `確認待ち / 要修正` は届かない。
+- `有効=false` は届かない。
 
 ---
 
@@ -317,144 +322,77 @@ testTodayConfirmedSummitFlyerNotification
 同じチラシで再度:
 
 ```text
-testSummitFlyerCatalogAutomation
+testSummitLifeFlyerSync
 ```
-
-を実行します。
 
 確認:
 
 ```text
-[ ] 同じチラシ行が無制限に増えない
-[ ] 同じ特売行が無制限に増えない
-[ ] 確認済みだったチラシが勝手に確認待ちへ戻らない
+[ ] 同じチラシが無制限に増えない
+[ ] 同じ特売予定が無制限に増えない
+[ ] 確認済みが勝手に確認待ちへ戻らない
 ```
 
 ---
 
-# 11. 新しいチラシ更新テスト
+# 11. 最終トリガー
 
-新しいチラシが配信された後に日次処理またはテストを実行します。
-
-期待:
+全テスト正常後、一度だけ:
 
 ```text
-新しいチラシ
-→ チラシ一覧へ確認待ち
-→ LINEへ「新しいチラシを読み取りました」通知
-→ 画像URLを表示
-→ 商品はまだ有効化されない
-```
-
-画像と結果を確認してから確認済みにします。
-
----
-
-# 12. 最終トリガー
-
-全テストが正常なら一度だけ:
-
-```text
-installDailySummitFlyerReviewedTrigger
+installDailySummitLifeCalendarTrigger
 ```
 
 を実行します。
 
-この関数は旧トリガー:
+旧チラシ系トリガーを削除し、最終版:
 
 ```text
-runDailySummitFlyerAutomation
-runDailySummitFlyerNotionAutomation
-runDailySummitFlyerCatalogAutomation
-```
-
-を削除し、最終版:
-
-```text
-runDailySummitFlyerCatalogReviewedAutomation
+runDailySummitLifeCalendarAutomation
 ```
 
 を毎日6時台に登録します。
 
-**運用ではこの確認済み版だけを使ってください。**
-
 ---
 
-# 13. 日次処理
-
-最終的な毎朝の流れ:
+# 12. 日次処理
 
 ```text
 Shufoo一覧 + 公式ページ確認
 ↓
 変更なし → Gemini解析なし
-変更あり → 新しいチラシ画像をGemini解析
+変更あり → 画像解析
 ↓
-新チラシを確認待ちでNotionへ保存
+新チラシを確認待ちでチラシ一覧へ保存
 ↓
-以前に確認状態を変更したチラシを商品へ反映
+生活カレンダーへ 種類=特売 / 有効=false で保存
 ↓
-期限切れ商品を無効化
+以前の確認状態を反映
 ↓
-今日 + 確認済み + 有効=true の商品だけ取得
+期限切れ特売を無効化
+↓
+今日 + 種類=特売 + 確認済み + 有効=true を取得
 ↓
 LINE通知
 ```
 
-新しいチラシは、その日の朝に解析されても確認するまでは日次特売通知へ入りません。
+新しいチラシは、確認するまで日次特売通知へ入りません。
 
 ---
 
-# 14. トラブルシューティング
-
-## 画像が0件
-
-`testSummitFlyerCatalogParse`のログを確認します。
-
-Shufoo側のHTML/JavaScript/画像URL形式が変更された可能性があります。
-
-## 月間チラシが出ない
-
-- 実際に月間チラシが現在掲載されているか確認。
-- 画像またはHTMLから掲載期間を読み取れているか確認。
-- `start_date/end_date`をログで確認。
-
-## Notion同期失敗
+# 13. 完了条件
 
 ```text
-NOTION_API_KEY
-NOTION_FLYER_DATABASE_ID
-NOTION_FLYER_LIST_DATABASE_ID
-```
-
-とIntegration接続を確認します。
-
-## 通知が0件
-
-特売カレンダーで対象商品が:
-
-```text
-確認状態 = 確認済み
-有効 = true
-特売日 = 今日を含む
-```
-
-になっているか確認します。
-
----
-
-# 15. 完了条件
-
-```text
-[ ] testSummitFlyerCatalogParse で画像とflyersを取得
-[ ] 現在掲載中の月間チラシがある場合は月間として判定
+[ ] testSummitLifeFlyerParse で画像とflyersを取得
+[ ] 月間チラシがある場合は月間として判定
+[ ] testSummitLifeFlyerSync で確認待ち登録
 [ ] 画像URLと抽出内容をNotionで比較できる
-[ ] 新規データが確認待ち / 有効=false で入る
-[ ] 確認済みへ変更して applyFlyerReviewsNow で有効化できる
+[ ] 確認済みへ変更して applyLifeFlyerReviewsNow で有効化
+[ ] 生活カレンダーに 種類=特売 で表示
 [ ] 要修正は通知対象にならない
-[ ] 確認済みだけLINEへ届く
-[ ] 同一チラシの重複が増えない
-[ ] installDailySummitFlyerReviewedTrigger を実行済み
+[ ] testTodayLifeCalendarFlyerNotification で確認済みだけLINEへ届く
+[ ] 同一チラシ・特売の重複が増えない
+[ ] installDailySummitLifeCalendarTrigger を実行済み
 ```
 
 ここまで通ったらPhase 2.7を実機確認完了とします。
