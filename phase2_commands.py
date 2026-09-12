@@ -5,6 +5,7 @@ import requests
 
 import card_queue
 import finance_phase2
+import help_guide
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -80,13 +81,34 @@ def build_phase2_help():
         "2C 将来予測・目標\n"
         "・年間予測\n"
         "・貯金目標\n\n"
-        "詳しい形式は「ヘルプ」またはPHASE2_TEST.mdを確認してください。"
+        "目的から探すなら「？」、今やることを見るなら「おすすめ」。"
     )
 
 
 def handle_text_command(text):
-    """Phase 2の同期コマンドを処理。該当しない場合はNoneを返す。"""
+    """Phase 2と案内系の同期コマンドを処理。該当しない場合はNoneを返す。"""
     message = (text or "").strip()
+    lowered = message.lower()
+
+    # 新しい目的ベースのヘルプ。app.py後半の旧ヘルプより先に処理される。
+    if message in ["？", "?", "ヘルプ", "使い方"] or lowered == "help":
+        return help_guide.create_goal_help_flex()
+
+    if message == "おすすめ":
+        return help_guide.build_smart_recommendations()
+
+    if message == "コマンド":
+        return help_guide.command_list_text()
+
+    if message.startswith("何したい ") or message.startswith("何したい　"):
+        intent = message[5:].strip()
+        return help_guide.suggest_for_intent(intent)
+
+    if message.startswith("ヘルプ ") or message.startswith("ヘルプ　"):
+        key = message.replace("　", " ").split(maxsplit=1)[1].strip()
+        purpose = help_guide.purpose_help_text(key)
+        if purpose:
+            return purpose
 
     if message in ["家計判断", "Phase2", "phase2", "フェーズ2"]:
         return build_phase2_help()
