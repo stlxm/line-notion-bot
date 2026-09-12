@@ -166,6 +166,19 @@ applyLifeFlyerReviewsNow
 
 `12日・13日限り` のような短期商品が月間特価に押し出されないようにしています。通知上限は20件です。
 
+## 強化した重複判定
+
+実機で残った表記揺れに対応するため、通知時だけ次を正規化します。
+
+```text
+産地付き/なし
+空白・括弧・区切り記号
+切りおとし / 切り落とし
+実機で確認したOCR誤字
+```
+
+さらに、価格が同じで容量/個数が矛盾せず、商品名が包含関係または同一商品ファミリーなら1件へまとめます。価格違い・明確な別容量は別商品として残します。Notion元データは削除しません。
+
 テスト:
 
 ```text
@@ -233,27 +246,6 @@ runDailySummitLifeCalendarAutomation
 
 ---
 
-# 通常カード監視
-
-```text
-checkCardEmails → 1時間ごと
-```
-
----
-
-# 定期通知
-
-```text
-runDailySummitLifeCalendarAutomation → 毎日6時台
-sendDailyMemoReminder               → 毎日朝8時ごろ
-sendDailyBudgetAlert               → 毎日20時ごろ
-sendDailyCardPendingReminder       → 毎日20〜21時ごろ
-sendMonthEndCardCheck              → 毎日21時ごろ
-sendWeeklyFinanceReport            → 毎週日曜20時ごろ
-```
-
----
-
 # GASとGitHubの同期
 
 GitHubの`.gs`更新はApps Scriptへ自動反映されません。
@@ -271,20 +263,13 @@ gas/FlyerLifeCalendar.gs
 
 # トラブルシューティング
 
-チラシが1件しか出ない:
-- `testSummitShufooDeliveryIds` の配信IDを確認。
-- 5ID揃わない場合はID抽出側を確認。
-
-解析件数が減る:
-- `testSummitLifeFlyerSync` の `detected / analyzed / missing` を確認。
-- 1件でも失敗した場合は部分同期しないのが正常。
-
-LINE通知0件:
-- チラシ一覧が `確認済み` か
-- 生活カレンダーが `種類=特売 / 確認状態=確認済み / 有効=true` か
-- 今日が `日付` の範囲内か
+LINE通知の重複が多い:
+- `FlyerDeals.gs` をGitHub最新版で丸ごと上書き
+- `testTodaySummitFlyerNotification` を実行
+- `[Notion今日分] 元=N件 / 重複整理後=M件` を比較
+- 価格違い・別容量が別件で残るのは正常
 
 短期商品が通知されない:
 - `testTodaySummitFlyerNotification` を実行
-- `[Notion今日分]` の元件数/重複整理後件数を確認
 - `日付` が今日を含んでいるか確認
+- `確認状態=確認済み / 有効=true` を確認
