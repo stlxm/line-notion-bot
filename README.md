@@ -19,6 +19,8 @@ LINEを入口に、家計簿・予算・カード利用通知・固定費/サブ
 
 # サミットチラシ → Notion生活カレンダー
 
+状態: **Phase 2.7 実装完了・実機確認済み・日次トリガー運用中**
+
 対象店舗:
 
 ```text
@@ -136,15 +138,17 @@ Notion「チラシ一覧」へ確認待ちで保存
 
 同じ商品・価格・容量が月間特価と短期特売の両方にある場合は、短期側を優先します。`12日・13日限り` のような備考を持つ行も優先して残します。通知上限は20件です。
 
-2026-09-12の実機ログでは、通知対象114件に対する第一段階の整理後件数が83件→67件→68件と変化しました。件数だけでなく、実際に残った代表重複を基準に改善しています。`マルちゃん ソースやきそば / 3食入` と `マルちゃんソースやきそば / 3食` は1件へ統合できました。
+2026-09-12の実機ログでは、通知対象114件に対する整理後件数が83件→67件→68件と変化しました。件数だけでなく、誤統合を避けながら実用上の重複を減らすことを優先しています。`マルちゃん ソースやきそば` の表記揺れは1件へ統合できました。
 
-999円・6切のサーモン系のように、同じ画像・同じ期間・同じ価格でも商品名の言い換えが強いケースに対応するため、第一段階の後に **同一コンテキスト専用の第2段階重複整理** を追加しました。価格、元画像、対象期間、商品ファミリーを一致条件にし、容量/個数が明確に矛盾する場合は統合しません。Notionの元データは削除・変更しません。
+一部の強い言い換えは通知上で複数残る場合がありますが、Notion元データを安全のため自動削除せず、既知の軽微な表示揺れとして許容します。
 
-確認テスト:
+日次運用:
 
 ```text
-testTodaySummitFlyerNotification
+runDailySummitLifeCalendarAutomation
 ```
+
+`installDailySummitLifeCalendarTrigger` 実行後、Apps Scriptのトリガー画面で上記関数が登録済みであることを実機確認しています。
 
 ## Notion「生活カレンダー」
 
@@ -312,15 +316,13 @@ AI Model  → 現在モデル確認
 
 ```text
 checkCardEmails                         → 1時間ごと
-runDailySummitLifeCalendarAutomation    → 毎日 朝6時台
+runDailySummitLifeCalendarAutomation    → 毎日 朝6時台（登録確認済み）
 sendDailyMemoReminder                   → 毎日 朝8時ごろ
 sendDailyBudgetAlert                    → 毎日 20時ごろ
 sendDailyCardPendingReminder            → 毎日 20〜21時ごろ
 sendMonthEndCardCheck                   → 毎日 21時ごろ
 sendWeeklyFinanceReport                 → 毎週日曜 20時ごろ
 ```
-
-チラシの旧トリガーは `installDailySummitLifeCalendarTrigger` で削除されます。
 
 ---
 
@@ -334,4 +336,4 @@ Phase 2: `PHASE2_TEST.md`
 
 障害対応: `MAINTENANCE.md`
 
-Phase 3はまだ開始していません。
+次の開発対象はPhase 3「入力・修正・検索」です。ユーザー指示があった場合に開始します。
