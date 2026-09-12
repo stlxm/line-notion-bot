@@ -115,9 +115,7 @@ Database ID:
 確認状態
 ```
 
-重要: LINE通知側も現在の生活カレンダーのプロパティ名 `予定名` / `日付` を読みます。旧名の `商品名` / `特売日` は使いません。
-
-カレンダービュー `生活カレンダー` は `日付` を基準にし、`有効=true` を表示するよう作成済みです。
+LINE通知側も現在の生活カレンダーのプロパティ名 `予定名` / `日付` を読みます。旧名の `商品名` / `特売日` は使いません。
 
 ## チラシ一覧
 
@@ -142,9 +140,7 @@ fdd0c0ce50974273b9b88f5272858e90
 | `チラシ識別` | Rich text |
 | `取得日時` | Date |
 
-`確認待ち`ビューと`月間チラシ`ビューは作成済みです。
-
-Notion Integrationを **生活カレンダーとチラシ一覧の両方** へ接続してください。
+Notion Integrationを生活カレンダーとチラシ一覧の両方へ接続してください。
 
 ---
 
@@ -171,8 +167,6 @@ GEMINI_MODEL
 SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
-
-チラシ連携用DB IDはGAS Script Propertiesへ設定します。
 
 ---
 
@@ -237,25 +231,6 @@ Apps Scriptタイムゾーン:
 (GMT+09:00) Tokyo
 ```
 
-## 検出・同期フロー
-
-```text
-Shufoo一覧/公式ページを取得
-↓
-個別リンク + 画像URLから配信IDを列挙
-↓
-配信IDごとに個別解析
-↓
-全配信IDが解析成功した場合のみNotionへ同期
-↓
-チラシ一覧 = 確認待ち
-生活カレンダー = 種類=特売 / 確認待ち / 有効=false
-↓
-確認済み配信IDだけ有効=true
-↓
-今日対象の確認済み特売をLINE通知
-```
-
 実機成功結果:
 
 ```text
@@ -266,43 +241,24 @@ flyers=5
 deals=57
 ```
 
-## LINE通知
+LINE通知:
 
 ```text
 1〜7日間 → 🔥 今日・短期特売
 8日以上  → 📅 月間・長期特売
 ```
 
-通知前に表記揺れ重複を整理します。2026-09-12の実機では今日対象114件に対して整理後68件。短期特売が月間商品より先に通知されることを確認済みです。
-
-一部の強い言い換え重複は残る場合がありますが、誤統合やNotion元データの削除を避けるため、軽微な表示揺れとして許容します。
+2026-09-12、`installDailySummitLifeCalendarTrigger` 実行後に Apps Script のトリガー画面で `runDailySummitLifeCalendarAutomation` が登録されていることを実機確認済みです。
 
 ---
 
 # 7. チラシのテスト・保守
 
-配信IDだけ確認（Gemini無料枠を消費しない）:
-
 ```text
-testSummitShufooDeliveryIds
-```
-
-同期テスト:
-
-```text
-testSummitLifeFlyerSync
-```
-
-通知だけ確認:
-
-```text
-testTodaySummitFlyerNotification
-```
-
-レビュー反映:
-
-```text
-applyLifeFlyerReviewsNow
+testSummitShufooDeliveryIds          配信IDだけ確認（Geminiなし）
+testSummitLifeFlyerSync              同期テスト
+testTodaySummitFlyerNotification     通知だけ確認
+applyLifeFlyerReviewsNow              レビュー反映
 ```
 
 詳細は `FLYER_TEST.md`。
@@ -321,22 +277,37 @@ applyLifeFlyerReviewsNow
 | `sendDailyBudgetAlert` | 毎日20時 |
 | `sendWeeklyFinanceReport` | 毎週日曜20時 |
 
-2026-09-12、`installDailySummitLifeCalendarTrigger` 実行後に Apps Script のトリガー画面で `runDailySummitLifeCalendarAutomation` が登録されていることを実機確認済みです。
+---
+
+# 9. 今後の開発ロードマップと設定変更
+
+今後の機能開発は、以前の100機能案から選択した48機能を基準にします。正式な番号・機能名・進捗は `DEVELOPMENT.md` を正本とします。
+
+次は **Phase 3A — 入力強化** を実装します。
+
+```text
+#32 レシート入力
+#33 複数品目レシート分類
+#34 自然文家計簿入力
+#36 よく使う支出テンプレート
+```
+
+Phase 3Aの実装開始時に、新しいNotionプロパティ・DB・Render環境変数・LINE設定が必要になった場合は、その時点でこのSETUP.mdへ追加します。現時点ではPhase 3A用の追加設定はまだ確定していないため、先に不要な設定を作りません。
+
+レシート入力ではLINE画像メッセージの取得方式を確認してから実装します。自然文入力は、金額・日付・支払方法などをまずルールベースで解析し、曖昧な場合だけ確認する方針です。
 
 ---
 
-# 9. トラブル時
+# 10. トラブル時
 
 通知が0件:
 - チラシ一覧が `確認済み` か
 - 生活カレンダーで対象行が `種類=特売 / 確認状態=確認済み / 有効=true` か
 - 当日が `日付` の範囲内か
-- 通知コードが `予定名` / `日付` を参照しているか
 
 短期特売が通知されない:
 - `testTodaySummitFlyerNotification` を実行
 - `[Notion今日分] ... 元=N件 / 重複整理後=M件` を確認
-- `備考` だけでなく `日付` が今日を含むか確認
 
 解析失敗:
 - Lite無料枠を使うため同じ同期テストを連続実行しない
@@ -344,6 +315,6 @@ applyLifeFlyerReviewsNow
 
 ---
 
-# 10. セキュリティ
+# 11. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
