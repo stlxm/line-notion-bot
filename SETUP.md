@@ -9,7 +9,7 @@
 - `UI_DESIGN.md`: LINE UI・Postback設計
 - `PHASE1_TEST.md`: Phase 1実機テスト
 - `PHASE2_TEST.md`: Phase 2実機テスト
-- `FLYER_TEST.md`: サミットチラシ自動化テスト
+- `FLYER_TEST.md`: サミットチラシ・月間チラシ・確認フロー実機テスト
 - `gas/README.md`: GAS詳細
 
 ---
@@ -22,7 +22,7 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 ---
 
-# 2. Notion DB仕様
+# 2. 主要Notion DB
 
 ## 家計簿DB
 
@@ -52,80 +52,89 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 ## 固定費DB
 
-| 名前 | 型 |
-|---|---|
-| `内容・店名` | Title |
-| `金額` | Number |
-| `ジャンル` | Select |
-| `カード・支払方法` | Select |
-| `有効` | Checkbox |
+`内容・店名` Title / `金額` Number / `ジャンル` Select / `カード・支払方法` Select / `有効` Checkbox
 
 環境変数: `NOTION_FIXED_DATABASE_ID`
 
 ## カード未処理DB
 
-| 名前 | 型 |
-|---|---|
-| `GmailMessageID` | Title |
-| `カード` | Rich text |
-| `利用先` | Rich text |
-| `金額` | Number |
-| `利用日` | Date |
-| `通知済み` | Checkbox |
-| `登録日時` | Date |
+`GmailMessageID` Title / `カード` Rich text / `利用先` Rich text / `金額` Number / `利用日` Date / `通知済み` Checkbox / `登録日時` Date
 
 環境変数: `NOTION_CARD_PENDING_DATABASE_ID`
 
 ## カード学習ルールDB
 
-| 名前 | 型 |
-|---|---|
-| `店名キー` | Title |
-| `表示名` | Rich text |
-| `ジャンル` | Select |
-| `学習回数` | Number |
-| `一致回数` | Number |
-| `自動登録` | Checkbox |
-| `最終更新` | Date |
+`店名キー` Title / `表示名` Rich text / `ジャンル` Select / `学習回数` Number / `一致回数` Number / `自動登録` Checkbox / `最終更新` Date
 
 環境変数: `NOTION_CARD_RULES_DATABASE_ID`
 
-## 貯金目標DB（Phase 2C）
+## 貯金目標DB
 
-| 名前 | 型 | 必須 |
-|---|---|---|
-| `目標名` | Title | 必須 |
-| `目標額` | Number | 必須 |
-| `現在額` | Number | 必須 |
-| `期限` | Date | 任意 |
-| `有効` | Checkbox | 必須 |
+`目標名` Title / `目標額` Number / `現在額` Number / `期限` Date / `有効` Checkbox
 
 環境変数: `NOTION_SAVINGS_GOALS_DATABASE_ID`
 
-## 特売カレンダーDB
+---
 
-サミットのチラシを保存する専用DBです。
+# 3. サミット特売用Notion DB
 
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `商品名` | Title | 特売商品名 |
-| `特売日` | Date | 単日または開始〜終了 |
-| `価格` | Rich text | チラシ価格表記 |
-| `容量・単位` | Rich text | 1パック、100gなど |
-| `店舗` | Select | サミット ミナノ分倍河原店 |
-| `備考` | Rich text | 税込/税抜・条件等 |
-| `優先度` | Number | 1〜3 |
-| `チラシURL` | URL | 取得元 |
-| `チラシ識別` | Rich text | チラシ更新判定用 |
-| `識別キー` | Rich text | 重複防止用 |
-| `有効` | Checkbox | 現在のチラシで有効か |
-| `更新日時` | Date | 最終同期日時 |
+## 特売カレンダー
 
-`特売日`を使ったカレンダービューを作成してください。おすすめのビュー条件は `有効 = true` です。
+作成済みDatabase ID:
+
+```text
+684f959e451047389505a95ed368a7d6
+```
+
+| 名前 | 型 |
+|---|---|
+| `商品名` | Title |
+| `特売日` | Date |
+| `価格` | Rich text |
+| `容量・単位` | Rich text |
+| `店舗` | Select |
+| `備考` | Rich text |
+| `優先度` | Number |
+| `チラシURL` | URL |
+| `チラシ識別` | Rich text |
+| `識別キー` | Rich text |
+| `有効` | Checkbox |
+| `更新日時` | Date |
+| `元チラシ名` | Rich text |
+| `元画像URL` | URL |
+| `確認状態` | Select (`確認待ち/確認済み/要修正`) |
+
+`特売日`を使うカレンダービューは作成済みです。`有効=true` の商品だけ表示します。
+
+## チラシ一覧
+
+作成済みDatabase ID:
+
+```text
+fdd0c0ce50974273b9b88f5272858e90
+```
+
+| 名前 | 型 |
+|---|---|
+| `チラシ名` | Title |
+| `種別` | Select (`月間/週次/日替わり/その他`) |
+| `掲載期間` | Date |
+| `元URL` | URL |
+| `画像URL` | URL |
+| `画像一覧` | Rich text |
+| `抽出件数` | Number |
+| `抽出サマリー` | Rich text |
+| `確認状態` | Select (`確認待ち/確認済み/要修正`) |
+| `チラシ識別` | Rich text |
+| `取得日時` | Date |
+
+`確認待ち`ビューと`月間チラシ`ビューは作成済みです。
+
+Notion Integrationを **両方のDB** へ接続してください。
 
 ---
 
-# 3. Render環境変数
+# 4. Render環境変数
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
@@ -149,9 +158,11 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
+チラシ機能はGASでNotionへ直接同期するため、`NOTION_FLYER_DATABASE_ID` / `NOTION_FLYER_LIST_DATABASE_ID` はRenderではなくGAS Script Propertiesへ設定します。
+
 ---
 
-# 4. Gemini AIモデル
+# 5. Gemini AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
@@ -160,161 +171,38 @@ AI Model  → 現在モデル確認
 AI 質問   → 選択中モデルで回答
 ```
 
-既定はLiteです。
+LINE AIの既定はLiteです。チラシ画像解析も既定で `gemini-3.5-flash-lite` を使います。
 
 ---
 
-# 5. 目的ベースのヘルプ
-
-```text
-？
-ヘルプ
-おすすめ
-何したい 節約したい
-コマンド
-```
-
-この案内機能はGeminiを使いません。
-
----
-
-# 6. Phase 2
-
-## Phase 2A
-
-```text
-今日使える
-ペース
-異常支出
-```
-
-## Phase 2B
-
-```text
-予算提案
-月締め
-月締め YYYY-MM
-月締め確定 YYYY-MM
-月締め確定強制 YYYY-MM
-月次レビュー
-月次レビュー YYYY-MM
-```
-
-## Phase 2C
-
-```text
-年間予測
-年間予測 2026
-貯金目標
-貯金目標追加 旅行 300000 50000 2027-03-31
-貯金更新 旅行 80000
-```
-
----
-
-# 7. サミット特売Notionカレンダー・LINE日次通知
+# 6. サミットチラシ自動化
 
 対象:
 
 ```text
-サミット ミナノ分倍河原店
+公式店舗ページ:
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
+
+Shufooチラシ一覧:
+https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
 ```
 
-Apps Scriptへ入れるファイルは1つです。
+Apps Scriptへ次の3ファイルをコピーします。
 
 ```text
 gas/FlyerDeals.gs
+gas/FlyerReview.gs
+gas/FlyerReviewedNotify.gs
 ```
 
-この1ファイルが取得・Gemini画像解析・Notion同期・LINE通知を担当します。
+役割:
+- `FlyerDeals.gs`: HTML/iframe/画像取得、共通Gemini・Notion・LINE処理
+- `FlyerReview.gs`: Shufoo一覧解析、月間/週次/日替わり分類、チラシ一覧DB、確認状態反映
+- `FlyerReviewedNotify.gs`: 確認済み商品のみ日次通知
 
-## チラシ用 Script Properties
+## GAS Script Properties
 
-```text
-GEMINI_API_KEY
-NOTION_API_KEY
-NOTION_FLYER_DATABASE_ID
-LINE_USER_ID
-LINE_CHANNEL_ACCESS_TOKEN
-```
-
-任意:
-
-```text
-FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
-```
-
-`NOTION_API_KEY`は既存のNotion Integration Tokenと同じものをScript Propertiesへ設定できます。秘密値はチャットへ貼らないでください。
-
-Notion Integrationを特売カレンダーDBへ接続してください。
-
-## Apps Scriptタイムゾーン
-
-```text
-(GMT+09:00) Tokyo
-```
-
-## 初回テスト
-
-解析だけ:
-
-```text
-testSummitFlyerParse
-```
-
-Notion同期 + LINE:
-
-```text
-testSummitFlyerAutomation
-```
-
-Notion登録済みデータからLINEだけ:
-
-```text
-testTodaySummitFlyerNotification
-```
-
-## 毎日自動実行
-
-一度だけ:
-
-```text
-installDailySummitFlyerTrigger
-```
-
-以降は毎日6時台に:
-
-```text
-最新チラシ確認
-↓
-新しいチラシだけGemini画像解析
-↓
-Notionへ同期
-↓
-Notionから今日分を再取得
-↓
-LINE通知
-```
-
-同じチラシならGemini解析結果を再利用します。
-
-詳細は`FLYER_TEST.md`。
-
----
-
-# 8. GAS
-
-Apps Scriptへ最新版をコピー:
-
-```text
-gas/Code.gs
-gas/FinanceReports.gs
-gas/DailyMemo.gs
-gas/FlyerDeals.gs
-```
-
-既存カード/定期通知用:
+既存:
 
 ```text
 LINE_USER_ID
@@ -323,67 +211,137 @@ RENDER_BASE_URL
 SCHEDULER_SECRET
 ```
 
-チラシ用:
+チラシで追加:
 
 ```text
 GEMINI_API_KEY
 NOTION_API_KEY
-NOTION_FLYER_DATABASE_ID
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
+NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```
 
-GitHubの`.gs`は通常Apps Scriptへ自動同期されません。
+任意:
+
+```text
+FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+秘密値 (`GEMINI_API_KEY`, `NOTION_API_KEY`, LINE token等) はチャットやGitHubへ貼らず、Apps Scriptの「プロジェクトの設定 → スクリプト プロパティ」へ直接設定してください。
+
+Apps Scriptタイムゾーン:
+
+```text
+(GMT+09:00) Tokyo
+```
 
 ---
 
-# 9. GASトリガー
+# 7. チラシの確認フロー
+
+新しいチラシを読み取ると:
+
+```text
+チラシ一覧 → 確認状態 = 確認待ち
+特売カレンダー商品 → 有効=false / 確認待ち
+```
+
+Notionの `チラシ一覧 > 確認待ち` で以下を比較します。
+
+```text
+画像URL / 画像一覧
+チラシ名
+掲載期間
+抽出件数
+抽出サマリー
+元URL
+```
+
+正しければ `確認状態` を `確認済み` に変更します。
+
+次回自動実行、または手動で:
+
+```text
+applyFlyerReviewsNow
+```
+
+を実行すると、そのチラシ由来の商品だけ:
+
+```text
+確認状態 = 確認済み
+有効 = true
+```
+
+になります。
+
+誤りがある場合はチラシ一覧を `要修正` にします。そのチラシの商品は `有効=false` のままです。
+
+---
+
+# 8. 月間チラシ
+
+月初に配信され、約20日以上の掲載期間を持つチラシは `月間` として扱います。
+
+Shufoo一覧と画像の掲載期間をGeminiが読み取り、`チラシ一覧 > 月間チラシ` に表示します。
+
+月間チラシと週次/日替わりチラシは同時に有効化できます。同一商品でも元チラシ・価格・期間が異なれば別行として保持します。
+
+---
+
+# 9. チラシ初回テスト
+
+順番:
+
+```text
+1. testSummitFlyerCatalogParse
+2. testSummitFlyerCatalogAutomation
+3. Notion「チラシ一覧 > 確認待ち」で画像と抽出結果を確認
+4. 正しいチラシを「確認済み」に変更
+5. applyFlyerReviewsNow
+6. testTodayConfirmedSummitFlyerNotification
+7. installDailySummitFlyerReviewedTrigger
+```
+
+詳細は `FLYER_TEST.md`。
+
+---
+
+# 10. GASトリガー
 
 | 関数 | 推奨 |
 |---|---|
 | `checkCardEmails` | 1時間ごと |
-| `runDailySummitFlyerAutomation` | 毎日6時台 |
+| `runDailySummitFlyerCatalogReviewedAutomation` | 毎日6時台 |
 | `sendDailyMemoReminder` | 毎日朝8時 |
 | `sendDailyCardPendingReminder` | 毎日20〜21時 |
 | `sendMonthEndCardCheck` | 毎日21時 |
 | `sendDailyBudgetAlert` | 毎日20時 |
 | `sendWeeklyFinanceReport` | 毎週日曜20時 |
 
----
-
-# 10. Phase 1カード自動化
-
-`カードテスト`で本物の未処理がなくてもテスト可能です。
+一度だけ `installDailySummitFlyerReviewedTrigger` を実行すると、旧チラシトリガーを削除して新しい確認済み通知トリガーへ切り替えます。
 
 ---
 
-# 11. Postback制限
+# 11. トラブル時
 
-LINE Postback `data`は300文字以内です。
+チラシ解析0件:
+- `testSummitFlyerCatalogParse` の実行ログを見る
+- `GEMINI_API_KEY` / `FLYER_GEMINI_MODEL` を確認
+- Shufoo/公式サイトの画像配信形式変更を確認
 
----
+Notion同期失敗:
+- `NOTION_API_KEY`
+- `NOTION_FLYER_DATABASE_ID`
+- `NOTION_FLYER_LIST_DATABASE_ID`
+- Integrationが両DBへ接続済みか
+- DBプロパティ名/型がこのSETUPと一致するか
 
-# 12. 導入確認
-
-Phase 1: `PHASE1_TEST.md`
-
-Phase 2: `PHASE2_TEST.md`
-
-チラシ: `FLYER_TEST.md`
-
----
-
-# 13. トラブル時
-
-チラシ自動化はApps Scriptの実行ログを確認します。
-
-主な確認:
-- `NOTION_FLYER_DATABASE_ID`が正しいか
-- DBプロパティ名・型が上表と完全一致しているか
-- Notion Integrationが特売DBへ接続されているか
-- `GEMINI_API_KEY`が設定されているか
-- `LINE_USER_ID` / `LINE_CHANNEL_ACCESS_TOKEN`が正しいか
+通知が0件:
+- チラシ一覧が `確認済み` か
+- 特売カレンダーの対象商品が `確認状態=確認済み / 有効=true` か
+- 当日が `特売日` の範囲内か
 
 ---
 
-# 14. セキュリティ
+# 12. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
