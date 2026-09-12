@@ -208,11 +208,18 @@ Shufooでは次のURLの `<配信ID>` 部分を1チラシの実体として扱�
 /t/asp_iframe/shop/264241/<配信ID>/
 ```
 
+また、店舗ページに個別リンクが1件しか出ない場合でも、画像URLに含まれる配信IDを拾います。
+
+```text
+.../c/YYYY/MM/DD/c/<配信ID>/img/image1_00.jpg
+```
+
 例:
 
 ```text
-/t/asp_iframe/shop/264241/9783726841844/
-/t/asp_iframe/shop/264241/4441736841834/
+9783726841844
+4441736841834
+3487936841840
 ```
 
 同じ店舗でも配信IDが違えば別チラシです。名前ではまとめません。
@@ -226,7 +233,7 @@ gas/FlyerLifeCalendar.gs
 
 役割:
 - `FlyerDeals.gs`: HTML/iframe/画像取得、Notion/LINE共通関数
-- `FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信IDごとの個別画像解析、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
+- `FlyerLifeCalendar.gs`: Shufooリンク/画像URLから配信ID列挙、配信IDごとの個別画像解析、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
 
 ## GAS Script Properties
 
@@ -269,13 +276,15 @@ Apps Scriptタイムゾーン:
 # 7. チラシ検出・解析フロー
 
 ```text
-Shufoo一覧を取得
+Shufoo一覧/公式ページを取得
 ↓
-/shop/264241/<配信ID>/ を列挙
+個別リンク + 画像URLから配信IDを列挙
+↓
+配信IDをID文字列で重複除去
 ↓
 配信IDごとにページを個別取得
 ↓
-配信IDごとに画像を個別取得
+その配信IDと一致する画像だけを優先
 ↓
 配信IDごとにGemini解析
 ↓
@@ -288,7 +297,7 @@ Shufoo一覧を取得
 20日以上 → 月間
 4〜19日  → 週次
 1〜2日   → 日替わり
-その他   → その他
+3日      → その他
 ```
 
 画像/HTMLから期間が読めない場合は推測で確定しません。
@@ -330,13 +339,13 @@ applyLifeFlyerReviewsNow
 
 # 9. 初回・再テスト
 
-順番:
+まずGemini無料枠を消費しないID検出テストを行います。
 
 ```text
 1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
-2. testSummitLifeFlyerParse
-3. 実行ログの「検出した配信ID」を確認
-4. 現在3種類あるなら配信IDが3件出ることを確認
+2. testSummitShufooDeliveryIds
+3. 実行ログの「候補配信ID」「検出した配信ID」を確認
+4. 期待する配信IDが揃ったら testSummitLifeFlyerParse
 5. testSummitLifeFlyerSync
 6. Notion「チラシ一覧 > 確認待ち」で配信ID・画像・抽出結果を確認
 7. 正しいチラシを「確認済み」に変更
@@ -369,9 +378,10 @@ applyLifeFlyerReviewsNow
 # 11. トラブル時
 
 チラシが1件しか出ない:
-- `testSummitLifeFlyerParse` の最初の `検出した配信ID` を確認
-- 期待3件なのにIDが1件ならShufoo一覧のリンク抽出を確認
-- IDは複数なのにflyersが減るなら、各配信IDの掲載期間/画像解析ログを確認
+- `testSummitShufooDeliveryIds` を実行する
+- `候補配信ID` に画像URL由来のIDが複数出るか確認
+- 画像URL例 `.../c/YYYY/MM/DD/c/<配信ID>/img/...` のIDを抽出する
+- 候補は複数なのに `検出した配信ID` が減る場合は、各配信IDページの画像取得を確認
 
 Notion同期失敗:
 - `NOTION_API_KEY`
