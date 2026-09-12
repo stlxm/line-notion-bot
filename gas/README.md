@@ -34,19 +34,17 @@ NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```
 
-`NOTION_FLYER_DATABASE_ID` は現在Notionの `生活カレンダー` を指します。
-
 任意:
 
 ```text
 FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-未設定でも `gemini-3.5-flash-lite` を使用します。
-
 ---
 
 # サミットチラシ → 生活カレンダー
+
+状態: **実装完了・実機確認済み・日次運用中**
 
 対象店舗:
 
@@ -59,7 +57,7 @@ Shufoo店舗ID: 264241
 
 `FlyerLifeCalendar.gs` が取得・解析・Notion同期の本体です。
 
-`FlyerDeals.gs` は現在、次の共通処理と通知だけを担当します。
+`FlyerDeals.gs` は次を担当します。
 
 ```text
 HTML/iframe/画像URL処理
@@ -70,13 +68,11 @@ Notion API共通関数
 LINE push共通関数
 ```
 
-旧 `runDailySummitFlyerAutomation` 等は互換ラッパーとして残してあり、新しい生活カレンダー処理へ転送します。
-
 ---
 
 # 複数チラシの識別
 
-チラシ名ではなく、Shufoo URLの配信IDを1チラシの識別子として使います。
+チラシ名ではなくShufoo配信IDを使います。
 
 ```text
 /t/asp_iframe/shop/264241/<配信ID>/
@@ -88,7 +84,7 @@ LINE push共通関数
 .../c/YYYY/MM/DD/c/<配信ID>/img/image1_00.jpg
 ```
 
-実機で確認済みの5ID:
+実機確認済み5ID:
 
 ```text
 3342326844037
@@ -100,46 +96,7 @@ LINE push共通関数
 
 ---
 
-# Notion確認フロー
-
-```text
-新しい配信ID
-↓
-チラシ一覧 = 配信IDごとに確認待ち
-生活カレンダー = 元チラシID付き / 種類=特売 / 確認待ち / 有効=false
-↓
-Notion「チラシ一覧 > 確認待ち」で画像と抽出内容を照合
-↓
-正しい → 確認済み
-誤り   → 要修正
-```
-
-手動反映:
-
-```text
-applyLifeFlyerReviewsNow
-```
-
----
-
 # LINE通知
-
-生活カレンダーの現在のプロパティ名を使います。
-
-```text
-予定名
-日付
-種類
-価格
-容量・単位
-店舗
-備考
-優先度
-確認状態
-有効
-元画像URL
-チラシURL
-```
 
 通知対象:
 
@@ -160,67 +117,50 @@ applyLifeFlyerReviewsNow
 
 通知上限は20件です。
 
-## 重複判定
-
-2026-09-12の実機では、通知対象114件が段階的な整理で83件、次に67件まで減少しました。第2段階ではさらに次を正規化します。
+2026-09-12の実機では:
 
 ```text
-3食入 / 3食
-6切入、1パック / 6切入 1パック
-産地付き/なし
-空白・括弧・区切り記号
-切りおとし / 切り落とし
-実機で確認したOCR誤字
+元=114件
+重複整理後=68件
 ```
 
-完全正規化後の商品名が一致する場合は統合候補です。
+短期商品が月間商品より先に通知されることを確認済みです。表記揺れ重複も通知時に整理します。
 
-曖昧な商品ファミリー一致を統合する場合は、誤統合防止のため次をすべて要求します。
+一部の強い言い換え重複は残る場合がありますが、誤統合防止を優先し、Notion元データは自動削除しません。
 
-```text
-同じ価格
-容量/個数に矛盾なし
-同じ元画像
-同じ対象期間
-```
+---
 
-価格違い・明確な別容量は別商品として残します。Notion元データは削除しません。
-
-テスト:
+# Notion確認フロー
 
 ```text
-testTodaySummitFlyerNotification
-```
-
-確認例:
-
-```text
-マルちゃん ソースやきそば / 3食入
-マルちゃんソースやきそば / 3食
-→ 1件
-
-お刺身サーモン (切り落とし) / 999円 / 6切入、1パック
-刺身用サーモン各種 / 999円 / 6切入 1パック
-→ 1件
+新しい配信ID
+↓
+チラシ一覧 = 確認待ち
+生活カレンダー = 確認待ち / 有効=false
+↓
+人が画像と抽出結果を確認
+↓
+確認済み
+↓
+applyLifeFlyerReviewsNow または日次処理
+↓
+確認済み配信ID由来だけ有効=true
 ```
 
 ---
 
-# 初回・再テスト
+# テスト関数
 
-Apps Scriptの次の2ファイルをGitHub最新版で丸ごと上書きします。
-
-```text
-gas/FlyerDeals.gs
-gas/FlyerLifeCalendar.gs
-```
-
-診断用の `FlyerRecovery.gs` / `FlyerParseDebug.gs` / `FlyerStrictSync.gs` が残っていれば削除します。
-
-配信ID検出:
+配信IDのみ:
 
 ```text
 testSummitShufooDeliveryIds
+```
+
+解析:
+
+```text
+testSummitLifeFlyerParse
 ```
 
 同期:
@@ -229,31 +169,37 @@ testSummitShufooDeliveryIds
 testSummitLifeFlyerSync
 ```
 
-LINE通知だけ再テストする場合はGeminiを回さず:
+通知:
 
 ```text
 testTodaySummitFlyerNotification
 ```
 
-詳細は `FLYER_TEST.md`。
+レビュー反映:
+
+```text
+applyLifeFlyerReviewsNow
+```
 
 ---
 
 # 最終日次トリガー
 
-全テスト正常後、一度だけ:
+インストール関数:
 
 ```text
 installDailySummitLifeCalendarTrigger
 ```
 
-最終入口:
+日次入口:
 
 ```text
 runDailySummitLifeCalendarAutomation
 ```
 
-を毎日6時台へ設定します。
+**2026-09-12、Apps Scriptのトリガー画面で `runDailySummitLifeCalendarAutomation` が登録済みであることを実機確認済みです。**
+
+通常はこのトリガーをそのまま運用し、問題が起きたときだけ手動テストします。
 
 ---
 
@@ -274,13 +220,16 @@ gas/FlyerLifeCalendar.gs
 
 # トラブルシューティング
 
-LINE通知の重複が多い:
-- `FlyerDeals.gs` をGitHub最新版で丸ごと上書き
-- `testTodaySummitFlyerNotification` を実行
-- `[Notion今日分] 元=N件 / 重複整理後=M件` を比較
-- 価格違い・別容量が別件で残るのは正常
+LINE通知0件:
+- チラシ一覧が `確認済み` か
+- 生活カレンダーが `種類=特売 / 確認状態=確認済み / 有効=true` か
+- 今日が `日付` の範囲内か
 
 短期商品が通知されない:
 - `testTodaySummitFlyerNotification` を実行
-- `日付` が今日を含んでいるか確認
-- `確認状態=確認済み / 有効=true` を確認
+- `[Notion今日分]` の元件数/重複整理後件数を確認
+
+配信ID・解析異常:
+- まず `testSummitShufooDeliveryIds`
+- 必要時だけ `testSummitLifeFlyerParse` / `testSummitLifeFlyerSync`
+- Gemini無料枠を消費するため連続実行しない
