@@ -125,19 +125,81 @@ Phase 3より先に仕上げる追加フェーズ。
   - 旧名 `triggerMonthlyBudgetNotice` / `testMonthlyNotice` の互換ラッパー
 - LINE User ID / Channel Access Token はコードへ直書きせず、GAS Script Propertiesから取得する。
 
-実機完了条件:
+---
+
+## Phase 2.9 — 貸し借り管理を先行実装
+状態: **実装済み・要Render設定/実機確認**
+
+Phase 7の #89 立替管理系を、日常利用の優先度が高いためPhase 3より前へ先行したもの。#88 割り勘管理全体はまだPhase 7に残す。
+
+Notion `貸し借り管理` DBを作成済み。
+
 ```text
-1. Apps Scriptへ最新 FinanceReports.gs を反映
-2. testMonthlyBudgetNotice 実行
-3. LINEにFlexが届く
-4. 「設定する」→ 金額入力案内が返る
-5. テスト金額を入力
-6. Notion月別管理DBの当月「全体予算」が更新される
-7. installMonthlyBudgetNoticeTrigger 実行
-8. Apps Scriptのトリガー画面で sendMonthlyBudgetNotice / 毎月1日 / 6時台 を確認
+Database ID: f9b2c4eb59ea4c13b968f8d9b48663bc
 ```
 
-この確認が終わるまではPhase 3へ進まない。
+実装:
+- `loan_manager.py`
+- `phase2_commands.py` から先にルーティング
+
+LINE:
+
+```text
+貸した 田中 3000 ランチ代
+借りた 田中 2000
+貸し借り一覧
+精算 田中 3000
+```
+
+安全策:
+- 家計簿へ自動計上しない。
+- `精算` は相手+金額が未精算1件だけのときだけ更新。
+- 同額複数件なら自動更新せず停止。
+
+必要Render環境変数:
+
+```text
+NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
+```
+
+---
+
+## Phase 2.10 — 「この機能ある？」+ 機能追加要望収集
+状態: **実装済み・要Render設定/実機確認**
+
+機能数増加に対応する補助フェーズ。
+
+目的:
+- LINEで「この機能ある？」と自然に聞ける。
+- 実装済みなら使い方を返す。
+- 正式ロードマップ済み・未実装なら予定フェーズを返す。
+- 未知の機能ならNotion `機能追加要望` DBへ自動記録する。
+- 同名要望は新規行を増やさず `回数` を増やす。
+
+Notion DB:
+
+```text
+Database ID: 76e4fe5d248e4fd1a48f45e9bdd59e8c
+```
+
+実装:
+- `feature_guide.py`
+- `help_guide.py` に導線追加
+- `phase2_commands.py` から先にルーティング
+
+LINE例:
+
+```text
+機能確認 レシート入力
+レシート入力ってできる？
+貸し借りってある？
+```
+
+必要Render環境変数:
+
+```text
+NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
+```
 
 ---
 
@@ -196,10 +258,10 @@ Phase 3より先に仕上げる追加フェーズ。
 ---
 
 ## Phase 7 — 特殊な家計管理・出力
-状態: **未着手**
+状態: **一部先行実装あり**
 
-- #88 割り勘管理
-- #89 立替管理
+- #88 割り勘管理 — 未着手
+- #89 立替管理 — 貸し借り部分をPhase 2.9で先行実装、完全な立替/割り勘統合は後で拡張
 - #92 CSVエクスポート
 - #93 月次PDFレポート
 - #97 店名表記ゆれ整理
@@ -212,17 +274,22 @@ Phase 3より先に仕上げる追加フェーズ。
 現在の正式な再開位置:
 
 ```text
-Phase 2.8 — 毎月1日の予算設定案内の実機確認
+Phase 2.9 / 2.10 実機設定・確認
 
-1. Apps Scriptへ gas/FinanceReports.gs 最新版を反映
-2. testMonthlyBudgetNotice を実行
-3. LINEで「設定する」を押す
-4. テスト予算を入力
-5. Notion月別管理DBを確認
-6. 問題なければ installMonthlyBudgetNoticeTrigger
-7. トリガー画面で毎月1日6時台を確認
-8. DEVELOPMENTをPhase 2.8完了へ更新
-9. その後 Phase 3A #32 へ進む
+1. Renderへ以下を追加
+   NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
+   NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
+2. Renderを再デプロイ
+3. LINE: 貸した テスト 100 テスト
+4. LINE: 貸し借り一覧
+5. LINE: 精算 テスト 100
+6. LINE: 機能確認 貸し借り
+7. LINE: 機能確認 レシート入力
+8. LINE: 機能確認 架空の新機能
+9. Notion「機能追加要望」に未知機能が記録されたか確認
+10. 問題なければPhase 2.9 / 2.10を実機確認済みに更新
+11. 未完ならPhase 2.8 毎月1日予算通知を実機確認
+12. その後 Phase 3A #32 へ進む
 ```
 
 ---
@@ -238,3 +305,5 @@ Phase 2.8 — 毎月1日の予算設定案内の実機確認
 - Phase 3を3A / 3B / 3Cへ正式分割。
 - Phase 2.8「毎月1日の予算設定案内」をPhase 3より前へ追加。
 - 旧GASのハードコード方式をやめ、Script Properties方式で `FinanceReports.gs` へ正式統合。
+- Phase 2.9として貸し借り管理を先行実装し、Notion `貸し借り管理` DBを作成。
+- Phase 2.10として「この機能ある？」案内とNotion `機能追加要望` 自動収集を実装。
