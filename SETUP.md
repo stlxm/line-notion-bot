@@ -115,6 +115,8 @@ Database ID:
 確認状態
 ```
 
+重要: LINE通知側も現在の生活カレンダーのプロパティ名 `予定名` / `日付` を読みます。旧名の `商品名` / `特売日` は使いません。
+
 カレンダービュー `生活カレンダー` は `日付` を基準にし、`有効=true` を表示するよう作成済みです。
 
 ## チラシ一覧
@@ -224,8 +226,10 @@ gas/FlyerLifeCalendar.gs
 ```
 
 役割:
-- `FlyerDeals.gs`: HTML/iframe/画像取得、Notion/LINE共通関数
+- `FlyerDeals.gs`: Web/画像/Notion/LINE共通関数、今日の特売取得、重複整理、短期特売優先通知
 - `FlyerLifeCalendar.gs`: Shufooリンク/画像URLから配信ID列挙、配信IDごとの個別画像解析、再試行、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
+
+旧 `runDailySummitFlyerAutomation` / `testSummitFlyerAutomation` / `testSummitFlyerParse` / `installDailySummitFlyerTrigger` は互換ラッパーとして残し、新しい生活カレンダー側へ転送します。
 
 Recovery/Debug用ファイルは診断時だけの一時ファイルで、完成版には不要です。
 
@@ -335,6 +339,19 @@ applyLifeFlyerReviewsNow
 
 確認済みの配信ID由来の特売だけ `有効=true` になります。
 
+## LINE通知の並び順
+
+`testTodaySummitFlyerNotification` と日次通知では、生活カレンダーから今日を含む `確認済み / 有効=true` の特売を読みます。
+
+通知前に商品名・価格・容量の表記揺れを正規化し、同じ実質商品をまとめます。月間商品と短期商品が重複する場合は短期側を残します。
+
+```text
+1〜7日間 → 🔥 今日・短期特売
+8日以上  → 📅 月間・長期特売
+```
+
+`12日・13日限り` のような短期条件を先頭へ出し、月間特価が通知上限を先に使い切らないようにします。通知上限は20件です。
+
 ---
 
 # 9. 初回・再テスト
@@ -342,8 +359,8 @@ applyLifeFlyerReviewsNow
 まずGemini無料枠を消費しないID検出テストを行います。
 
 ```text
-1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
-2. 診断用に追加した FlyerRecovery.gs / FlyerParseDebug.gs がある場合は削除
+1. Apps Scriptの FlyerDeals.gs / FlyerLifeCalendar.gs をGitHub最新版で上書き
+2. 診断用に追加した FlyerRecovery.gs / FlyerParseDebug.gs / FlyerStrictSync.gs がある場合は削除
 3. testSummitShufooDeliveryIds
 4. 実行ログの「候補配信ID」「検出した配信ID」を確認
 5. 期待する配信IDが揃ったら testSummitLifeFlyerSync
@@ -353,8 +370,9 @@ applyLifeFlyerReviewsNow
 9. 正しいチラシを「確認済み」に変更
 10. applyLifeFlyerReviewsNow
 11. 生活カレンダーで 種類=特売 / 確認済み / 有効=true を確認
-12. testTodayLifeCalendarFlyerNotification
-13. installDailySummitLifeCalendarTrigger
+12. testTodaySummitFlyerNotification
+13. LINEで短期特売が月間特価より先に表示されることを確認
+14. installDailySummitLifeCalendarTrigger
 ```
 
 詳細は `FLYER_TEST.md`。
@@ -401,6 +419,12 @@ Notion同期失敗:
 - チラシ一覧が `確認済み` か
 - 生活カレンダーで対象行が `種類=特売 / 確認状態=確認済み / 有効=true` か
 - 当日が `日付` の範囲内か
+- 通知コードが `予定名` / `日付` を参照しているか
+
+短期特売が通知されない:
+- `testTodaySummitFlyerNotification` のログ先頭が短期商品になっているか
+- `[Notion今日分] ... 元=N件 / 重複整理後=M件` を確認
+- `備考` の「限り」だけではなく、`日付` が今日を含んでいることを確認
 
 ---
 
