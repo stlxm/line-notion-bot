@@ -4,6 +4,15 @@ from urllib.parse import urlencode
 from linebot.v3.messaging import FlexMessage, FlexContainer
 
 
+def _postback_action(label, data, display_text=None):
+    return {
+        "type": "postback",
+        "label": str(label)[:20],
+        "data": data,
+        "displayText": (display_text or f"▶ {label}")[:300],
+    }
+
+
 def create_choice_flex(title, options, callback_action, extra_params=None, include_cancel=False):
     extra_params = extra_params or {}
     buttons = []
@@ -11,12 +20,12 @@ def create_choice_flex(title, options, callback_action, extra_params=None, inclu
         params = {"action": callback_action, "val": option, **extra_params}
         buttons.append({
             "type": "button", "style": "primary", "height": "sm",
-            "action": {"type": "postback", "label": str(option)[:20], "data": urlencode(params)},
+            "action": _postback_action(option, urlencode(params), f"▶ {option}"),
         })
     if include_cancel:
         buttons.append({
             "type": "button", "style": "secondary", "height": "sm",
-            "action": {"type": "postback", "label": "キャンセル", "data": "action=cancel_registration"},
+            "action": _postback_action("キャンセル", "action=cancel_registration", "▶ キャンセル"),
         })
     flex_json = {
         "type": "bubble", "size": "mega",
@@ -61,7 +70,7 @@ def create_card_category_flex(
         label = f"★{category}" if category == suggested_cat else category
         category_buttons.append({
             "type": "button", "style": "primary", "height": "sm", "flex": 1,
-            "action": {"type": "postback", "label": str(label)[:10], "data": urlencode(params)},
+            "action": _postback_action(str(label)[:10], urlencode(params), f"▶ {category}"),
         })
 
     rows = []
@@ -75,33 +84,45 @@ def create_card_category_flex(
     if pending_id and save_action == "kakeibo_save" and same_store_count > 1:
         action_buttons.append({
             "type": "button", "style": "primary", "height": "sm",
-            "action": {"type": "postback", "label": f"同じ店 {same_store_count}件をまとめる",
-                       "data": urlencode({"action": "card_batch_select", "pending_id": pending_id})},
+            "action": _postback_action(
+                f"同じ店 {same_store_count}件をまとめる",
+                urlencode({"action": "card_batch_select", "pending_id": pending_id}),
+                f"▶ 同じ店 {same_store_count}件をまとめる",
+            ),
         })
     if pending_id and save_action == "kakeibo_save":
         action_buttons.append({
             "type": "button", "style": "primary", "height": "sm",
-            "action": {"type": "postback", "label": "店名を変更する",
-                       "data": urlencode({"action": "card_change_store_start", "pending_id": pending_id})},
+            "action": _postback_action(
+                "店名を変更する",
+                urlencode({"action": "card_change_store_start", "pending_id": pending_id}),
+                "▶ 店名を変更する",
+            ),
         })
     if pending_id and suggestion and suggestion.get("eligible_for_auto") and not suggestion.get("auto_register"):
         action_buttons.append({
             "type": "button", "style": "primary", "height": "sm",
-            "action": {"type": "postback", "label": "次回から自動登録ON",
-                       "data": urlencode({"action": "card_auto_on", "rule_id": suggestion.get("page_id")})},
+            "action": _postback_action(
+                "次回から自動登録ON",
+                urlencode({"action": "card_auto_on", "rule_id": suggestion.get("page_id")}),
+                "▶ 次回から自動登録ON",
+            ),
         })
 
     if save_action == "kakeibo_save":
         skip_data = urlencode({"action": "skip_card_pending", "pending_id": pending_id}) if pending_id else "action=cancel_registration"
         action_buttons.append({
             "type": "button", "style": "secondary", "height": "sm",
-            "action": {"type": "postback", "label": "登録しない", "data": skip_data},
+            "action": _postback_action("登録しない", skip_data, "▶ 登録しない"),
         })
     else:
         action_buttons.append({
             "type": "button", "style": "secondary", "height": "sm",
-            "action": {"type": "postback", "label": "戻る",
-                       "data": urlencode({"action": "card_select_cat", "pending_id": pending_id})},
+            "action": _postback_action(
+                "戻る",
+                urlencode({"action": "card_select_cat", "pending_id": pending_id}),
+                "▶ 戻る",
+            ),
         })
 
     body_contents = [
@@ -149,11 +170,9 @@ def create_duplicate_confirm_flex(pending_id, category, duplicate):
         ]},
         "footer": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
             {"type": "button", "style": "primary", "height": "sm",
-             "action": {"type": "postback", "label": "それでも保存する",
-                        "data": urlencode({"action": "kakeibo_save_force", "pending_id": pending_id, "cat": category})}},
+             "action": _postback_action("それでも保存する", urlencode({"action": "kakeibo_save_force", "pending_id": pending_id, "cat": category}), "▶ それでも保存する")},
             {"type": "button", "style": "secondary", "height": "sm",
-             "action": {"type": "postback", "label": "重複として処理済みにする",
-                        "data": urlencode({"action": "card_reconcile_duplicate", "pending_id": pending_id})}},
+             "action": _postback_action("重複として処理済みにする", urlencode({"action": "card_reconcile_duplicate", "pending_id": pending_id}), "▶ 重複として処理済みにする")},
         ]},
     }
     return FlexMessage(alt_text="家計簿の重複候補があります", contents=FlexContainer.from_json(json.dumps(flex_json, ensure_ascii=False)))
@@ -168,14 +187,12 @@ def create_card_rules_flex(rules):
         if rule.get("auto_register"):
             contents.append({
                 "type": "button", "style": "secondary", "height": "sm",
-                "action": {"type": "postback", "label": "自動登録OFF",
-                           "data": urlencode({"action": "card_auto_off", "rule_id": rule.get("page_id")})},
+                "action": _postback_action("自動登録OFF", urlencode({"action": "card_auto_off", "rule_id": rule.get("page_id")}), "▶ 自動登録OFF"),
             })
         elif rule.get("eligible_for_auto"):
             contents.append({
                 "type": "button", "style": "primary", "height": "sm",
-                "action": {"type": "postback", "label": "自動登録ON",
-                           "data": urlencode({"action": "card_auto_on", "rule_id": rule.get("page_id")})},
+                "action": _postback_action("自動登録ON", urlencode({"action": "card_auto_on", "rule_id": rule.get("page_id")}), "▶ 自動登録ON"),
             })
         contents.append({"type": "separator", "margin": "sm"})
     if not contents:
