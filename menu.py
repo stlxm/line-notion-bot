@@ -34,9 +34,20 @@ def create_main_menu_flex():
     """現在使える機能を大分類で見やすくまとめる。"""
     body = [{
         "type": "text",
-        "text": "使いたい機能を選んでください。AIは「AI 質問内容」と送ったときだけ呼び出します。",
+        "text": "使いたい機能を選んでください。迷ったら「目的から探す」か「今のおすすめ」を使えます。",
         "size": "sm", "color": "#666666", "wrap": True,
     }]
+
+    body += _section(
+        "✨ 迷ったら",
+        "コマンドを覚えなくても、目的や現在の状況から探せます",
+        [
+            _message_button("目的から探す", "？"),
+            _message_button("今のおすすめ", "おすすめ"),
+            _message_button("全コマンド一覧", "コマンド", "secondary"),
+        ],
+        "#1DB446",
+    )
 
     body += _section(
         "📊 家計簿・予算",
@@ -89,12 +100,11 @@ def create_main_menu_flex():
 
     body += _section(
         "🗂 Notion・その他",
-        "貯金目標、汎用データ登録、Notion、ヘルプ",
+        "貯金目標、汎用データ登録、Notion",
         [
             _message_button("貯金目標を見る", "貯金目標"),
             _message_button("データを追加する", "データ追加"),
             _message_button("Notionを開く", "Notion"),
-            _message_button("使い方を見る", "ヘルプ"),
         ],
         "#7B1FA2",
     )
