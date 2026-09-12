@@ -1,6 +1,6 @@
 # LINE Notion Bot セットアップガイド
 
-この文書はLINE・Notion・Gemini・Gmail・Google Apps Script・Renderを連携し、このBotを構築・保守するための手順書です。
+この文書はLINE・Notion・Gemini・Gmail・Google Apps Script・Googleカレンダー・Renderを連携し、このBotを構築・保守するための手順書です。
 
 関連文書:
 - `README.md`: 現在利用できる機能
@@ -9,13 +9,14 @@
 - `UI_DESIGN.md`: LINE UI・Postback設計
 - `PHASE1_TEST.md`: Phase 1実機テスト
 - `PHASE2_TEST.md`: Phase 2実機テスト
+- `FLYER_TEST.md`: サミットチラシ自動化テスト
 - `gas/README.md`: GAS詳細
 
 ---
 
 # 1. 必要サービス
 
-GitHub / Render / LINE Developers / Notion / Gmail / Google Apps Script / Google AI Studio
+GitHub / Render / LINE Developers / Notion / Gmail / Google Apps Script / Google Calendar / Google AI Studio
 
 Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作成・更新を許可します。
 
@@ -100,8 +101,6 @@ Phase 2Bで追加:
 
 ## 貯金目標DB（Phase 2C）
 
-新規DBを作成します。
-
 | 名前 | 型 | 必須 |
 |---|---|---|
 | `目標名` | Title | 必須 |
@@ -116,7 +115,7 @@ Phase 2Bで追加:
 NOTION_SAVINGS_GOALS_DATABASE_ID=<Database ID>
 ```
 
-このDBが未設定でも、Phase 2A・2Bと年間予測は利用できます。使えないのは貯金目標だけです。
+このDBが未設定でも、Phase 2A・2Bと年間予測は利用できます。
 
 ## メモDB
 
@@ -189,14 +188,12 @@ AI 質問   → 選択中モデルで回答
 コマンド
 ```
 
-挙動:
-
 - `？` / `ヘルプ`: 目的別Flexを表示
 - `おすすめ`: 現在のカード未処理、予算、支出ペース、異常支出、メモなどから最大3件提案
 - `何したい ○○`: キーワードベースで関連機能を提案
 - `コマンド`: 全コマンド一覧
 
-この案内機能はGeminiを使いません。`おすすめ`はNotion/カード未処理の読み取りを行うため、各DB設定が壊れている項目は無視して他の候補を返す設計です。
+この案内機能はGeminiを使いません。
 
 ---
 
@@ -214,10 +211,6 @@ Phase 2は3ブロックに分けて導入・確認します。
 異常支出
 ```
 
-- `今日使える`: 残り予算÷残り日数
-- `ペース`: 月経過率と予算消化率を比較
-- `異常支出`: 過去約4か月の中央値から外れた候補を表示
-
 ## Phase 2B — 月次判断
 
 月別管理DBへ`締め済み / 締め日時 / 確定支出`が必要です。
@@ -232,13 +225,7 @@ Phase 2は3ブロックに分けて導入・確認します。
 月次レビュー YYYY-MM
 ```
 
-月締めは終了済みの月だけ実行できます。今月・未来月は不可です。
-
-通常の`月締め確定`はカード未処理があると停止します。未処理を確認済みで意図的に締める場合だけ`月締め確定強制`を使います。
-
-プレビューだけではNotionを書き換えません。
-
-`予算提案`は過去3か月平均+約5%の余裕を表示するだけで、自動で予算を書き換えません。
+月締めは終了済みの月だけ実行できます。通常の`月締め確定`はカード未処理があると停止します。
 
 ## Phase 2C — 将来予測・目標
 
@@ -252,17 +239,100 @@ Phase 2は3ブロックに分けて導入・確認します。
 
 貯金目標だけ専用DBが必要です。
 
-一覧:
+---
+
+# 7. サミット特売カレンダー・LINE日次通知
+
+対象店舗:
 
 ```text
-家計判断
+サミット ミナノ分倍河原店
+https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
-でPhase 2のコマンド一覧を確認できます。
+Apps Scriptへ `gas/FlyerDeals.gs` を追加します。
+
+## Script Properties
+
+既存:
+
+```text
+LINE_USER_ID
+LINE_CHANNEL_ACCESS_TOKEN
+```
+
+追加必須:
+
+```text
+GEMINI_API_KEY
+```
+
+任意:
+
+```text
+FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
+FLYER_CALENDAR_ID=<Google Calendar ID>
+```
+
+`GEMINI_API_KEY`はチャットやGitHubへ貼らず、Apps Scriptの「プロジェクトの設定 → スクリプト プロパティ」へ直接設定してください。
+
+`FLYER_CALENDAR_ID`が未設定ならデフォルトカレンダーを使用します。専用の「サミット特売」カレンダーを作って、そのIDを設定する運用を推奨します。
+
+## Apps Scriptタイムゾーン
+
+```text
+(GMT+09:00) Tokyo
+```
+
+に設定してください。
+
+## 初回テスト
+
+解析だけ:
+
+```text
+testSummitFlyerParse
+```
+
+カレンダー + LINEまで:
+
+```text
+testSummitFlyerAutomation
+```
+
+## 毎日自動実行
+
+一度だけ:
+
+```text
+installDailySummitFlyerTrigger
+```
+
+を実行すると `runDailySummitFlyerAutomation` を毎日6時台に実行するトリガーを作成します。
+
+動作:
+
+```text
+公式店舗ページ
+↓
+チラシiframe/画像を取得
+↓
+必要な場合だけ同店舗のトクバイページへフォールバック
+↓
+Geminiで特売商品・価格・対象日を抽出
+↓
+Googleカレンダーへ日別の終日イベント1件として登録
+↓
+当日分をLINEへ通知
+```
+
+同一チラシはキャッシュを再利用し、毎日Geminiで画像解析し直さないようにしています。
+
+詳細テストは `FLYER_TEST.md` を参照してください。
 
 ---
 
-# 7. GAS
+# 8. GAS
 
 Apps Scriptへ最新版をコピー:
 
@@ -270,9 +340,10 @@ Apps Scriptへ最新版をコピー:
 gas/Code.gs
 gas/FinanceReports.gs
 gas/DailyMemo.gs
+gas/FlyerDeals.gs
 ```
 
-Script Properties:
+カード/定期通知用 Script Properties:
 
 ```text
 LINE_USER_ID
@@ -281,28 +352,29 @@ RENDER_BASE_URL
 SCHEDULER_SECRET
 ```
 
-GitHubの`.gs`は通常GASへ自動同期されません。
+チラシ用に `GEMINI_API_KEY` を追加します。
 
-Phase 2では新しいGASファイル・トリガーはありません。
+GitHubの`.gs`は通常GASへ自動同期されません。
 
 ---
 
-# 8. GASトリガー
+# 9. GASトリガー
 
 | 関数 | 推奨 |
 |---|---|
 | `checkCardEmails` | 1時間ごと |
+| `runDailySummitFlyerAutomation` | 毎日6〜7時台 |
+| `sendDailyMemoReminder` | 毎日朝8時 |
 | `sendDailyCardPendingReminder` | 毎日20〜21時 |
 | `sendMonthEndCardCheck` | 毎日21時 |
-| `sendDailyMemoReminder` | 毎日朝8時 |
 | `sendDailyBudgetAlert` | 毎日20時 |
 | `sendWeeklyFinanceReport` | 毎週日曜20時 |
 
 ---
 
-# 9. Phase 1カード自動化
+# 10. Phase 1カード自動化
 
-`カードテスト`で本物の未処理がなくてもテスト可能です。通常の未処理キュー・家計簿保存・カード学習を通るため、保存したテスト行はNotionへ実際に残ります。
+`カードテスト`で本物の未処理がなくてもテスト可能です。
 
 自動登録条件:
 
@@ -316,30 +388,21 @@ AND 本人が自動登録ON
 
 ---
 
-# 10. Postback制限
+# 11. Postback制限
 
 LINE Postback `data`は300文字以内。未処理カードでは店名・金額等を埋め込まず`pending_id`と最小限の値だけ送ります。
 
 ---
 
-# 11. 導入確認
+# 12. 導入確認
 
 Phase 1: `PHASE1_TEST.md`
 
 Phase 2: `PHASE2_TEST.md`
 
-Phase 2は2A → 2B → 2Cの順で確認します。
+チラシ: `FLYER_TEST.md`
 
-最低確認:
-
-```text
-2A: 今月の全体予算を設定
-2B: 月別管理DBへ 締め済み / 締め日時 / 確定支出 を追加
-2C: 貯金目標を使うならDB作成 + NOTION_SAVINGS_GOALS_DATABASE_ID
-Renderを最新mainで再デプロイ
-```
-
-案内機能の確認:
+案内機能:
 
 ```text
 ？
@@ -350,22 +413,23 @@ Renderを最新mainで再デプロイ
 
 ---
 
-# 12. トラブル時
+# 13. トラブル時
 
-Render Logsの最初のTracebackを確認してください。
+Render系はRender Logsの最初のTracebackを確認してください。
 
-Phase 2で多い設定ミス:
-- 月締め失敗 → 月別管理DBの3プロパティ名・型を確認
-- 月締め停止 → カード未処理件数を確認
-- 貯金目標が未設定表示 → `NOTION_SAVINGS_GOALS_DATABASE_ID`を確認
-- 貯金目標登録失敗 → Integrationが貯金目標DBへ接続されているか確認
-- 月次レビュー失敗 → `GEMINI_API_KEY`と`AI Model`を確認
-- 今日使える/ペースで予算未設定 → 月別管理DBの`全体予算`を設定
+チラシ自動化はApps Scriptの実行ログを確認します。
 
-詳細は`MAINTENANCE.md`。
+主な確認:
+- `GEMINI_API_KEY`未設定 → Script Propertiesを確認
+- カレンダーが見つからない → `FLYER_CALENDAR_ID`を確認、または一旦削除してデフォルトカレンダーを使用
+- LINE通知失敗 → `LINE_USER_ID` / `LINE_CHANNEL_ACCESS_TOKEN`を確認
+- チラシ0件 → `testSummitFlyerParse`を実行し、サイト側の配信形式変更を確認
+- Geminiエラー → `FLYER_GEMINI_MODEL`を確認
+
+詳細は`FLYER_TEST.md` / `MAINTENANCE.md`。
 
 ---
 
-# 13. セキュリティ
+# 14. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
