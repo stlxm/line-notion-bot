@@ -44,9 +44,9 @@ def create_main_menu_flex():
         [
             _message_button("今月のダッシュボード", "今月"),
             _postback_button("支出を入力する", "action=quick_input_kakeibo"),
+            _message_button("家計判断メニュー", "家計判断"),
             _message_button("今日使える額", "今日使える"),
             _message_button("支出ペースを見る", "ペース"),
-            _message_button("予算提案を見る", "予算提案"),
             _message_button("月次レビュー", "月次レビュー"),
             _message_button("予算一覧を見る", "予算一覧"),
             _message_button("週次レポートを見る", "週次レポート"),
