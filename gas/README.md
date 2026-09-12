@@ -68,13 +68,21 @@ sendMonthlyBudgetNotice
 [後でする]
 ```
 
-`設定する` のPostback:
+Postback:
 
 ```text
-action=start_monthly_budget_input
+設定する → action=start_monthly_budget_input
+後でする → action=cancel_registration
 ```
 
-Render側の既存予算入力処理へ接続します。
+両方のPostbackに `displayText` を付けています。
+
+```text
+設定する → ▶ 予算を設定する
+後でする → ▶ 後でする
+```
+
+Renderの応答を待つ前にトーク画面へ表示されるため、ボタンを押せたかすぐ確認できます。
 
 手動テスト:
 
@@ -116,16 +124,7 @@ Shufoo店舗ID: 264241
 
 `FlyerLifeCalendar.gs` が取得・解析・Notion同期の本体です。
 
-`FlyerDeals.gs` は次を担当します。
-
-```text
-HTML/iframe/画像URL処理
-Notion API共通関数
-生活カレンダーから今日の特売を読む
-通知前の表記揺れ重複整理
-短期特売優先のLINE通知
-LINE push共通関数
-```
+`FlyerDeals.gs` はHTML/iframe/画像URL処理、Notion API共通関数、生活カレンダーから今日の特売取得、通知前重複整理、短期特売優先通知、LINE push共通処理を担当します。
 
 ---
 
@@ -209,7 +208,7 @@ sendWeeklyFinanceReport                 毎週日曜20時ごろ
 
 GitHubの`.gs`更新はApps Scriptへ自動反映されません。
 
-今回の毎月予算通知を使う場合は、GitHub最新版の:
+毎月予算通知の最新版を使う場合は、GitHub最新版の:
 
 ```text
 gas/FinanceReports.gs
@@ -240,6 +239,10 @@ gas/FlyerLifeCalendar.gs
 - LINE WebhookがRender `/callback` へ届いているか確認
 - Renderが起動しているか確認
 - `action=start_monthly_budget_input` のPostback処理が動作しているか確認
+
+ボタンを押したのに即時表示が出ない:
+- Apps Scriptの `FinanceReports.gs` がGitHub最新版か確認
+- `displayText` が含まれているか確認
 
 チラシ異常:
 - まず `testSummitShufooDeliveryIds`
