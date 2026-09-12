@@ -76,6 +76,57 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 環境変数: `NOTION_SAVINGS_GOALS_DATABASE_ID`
 
+## 貸し借り管理DB
+
+Database ID:
+
+```text
+f9b2c4eb59ea4c13b968f8d9b48663bc
+```
+
+| 名前 | 型 |
+|---|---|
+| `相手` | Title |
+| `種類` | Select (`貸した/借りた`) |
+| `金額` | Number |
+| `日付` | Date |
+| `状態` | Select (`未精算/精算済み`) |
+| `精算日` | Date |
+| `メモ` | Rich text |
+
+環境変数:
+
+```text
+NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
+```
+
+このDBは家計簿とは別管理です。貸し借り記録を自動で支出・収入扱いにしません。
+
+## 機能追加要望DB
+
+Database ID:
+
+```text
+76e4fe5d248e4fd1a48f45e9bdd59e8c
+```
+
+| 名前 | 型 |
+|---|---|
+| `要望` | Title |
+| `問い合わせ文` | Rich text |
+| `状態` | Select (`未確認/検討中/採用/見送り`) |
+| `登録日` | Date |
+| `回数` | Number |
+| `備考` | Rich text |
+
+環境変数:
+
+```text
+NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
+```
+
+LINEで未実装の未知機能を聞いたときに自動登録します。同名要望がある場合は新規行を増やさず `回数` を増やします。
+
 ---
 
 # 3. 生活カレンダー・チラシ一覧
@@ -131,12 +182,23 @@ NOTION_AI_FEEDBACK_DATABASE_ID
 NOTION_CARD_PENDING_DATABASE_ID
 NOTION_CARD_RULES_DATABASE_ID
 NOTION_SAVINGS_GOALS_DATABASE_ID
+NOTION_LOAN_DATABASE_ID
+NOTION_FEATURE_REQUEST_DATABASE_ID
 NOTION_DATABASE_IDS
 GEMINI_API_KEY
 GEMINI_MODEL
 SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
+
+今回追加する値:
+
+```text
+NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
+NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
+```
+
+設定後、Renderを再デプロイしてください。
 
 ---
 
@@ -209,28 +271,46 @@ installMonthlyBudgetNoticeTrigger
 
 これにより `sendMonthlyBudgetNotice` が毎月1日6時台に実行されます。
 
-Apps Scriptのトリガー画面で次を確認してください。
+---
+
+# 7. 貸し借り管理
+
+Render再デプロイ後、LINEで:
 
 ```text
-関数: sendMonthlyBudgetNotice
-イベント: 時間主導型
-月: 毎月
-日: 1日
-時間: 午前6時〜7時
+貸した 田中 3000 ランチ代
+借りた 田中 2000
+貸し借り一覧
+精算 田中 3000
 ```
 
-旧関数名:
+を使えます。
 
-```text
-triggerMonthlyBudgetNotice
-testMonthlyNotice
-```
-
-も互換ラッパーとして残しています。
+`精算 相手 金額` は、未精算レコードが1件だけ一致したときだけ `状態=精算済み` と `精算日` を更新します。同じ相手・同じ金額が複数ある場合は安全のため自動更新しません。
 
 ---
 
-# 7. Gemini AIモデル
+# 8. 機能確認・機能追加要望
+
+Render再デプロイ後、LINEで:
+
+```text
+機能確認 レシート入力
+レシート入力ってできる？
+貸し借りってある？
+```
+
+のように質問できます。
+
+- 実装済み: 使い方を返す
+- 正式ロードマップ済み・未実装: 予定を返す
+- 未知の機能: `機能追加要望` DBへ自動登録
+
+機能一覧は `feature_guide.py` の `FEATURES` を正本にして順次更新します。
+
+---
+
+# 9. Gemini AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
@@ -243,7 +323,7 @@ LINE AIの既定はLiteです。
 
 ---
 
-# 8. サミットチラシ → 生活カレンダー
+# 10. サミットチラシ → 生活カレンダー
 
 状態: **実装完了・実機確認済み・日次運用中**
 
@@ -282,7 +362,7 @@ LINE通知:
 
 ---
 
-# 9. GASトリガー
+# 11. GASトリガー
 
 | 関数 | 推奨 |
 |---|---|
@@ -297,9 +377,15 @@ LINE通知:
 
 ---
 
-# 10. 開発ロードマップ
+# 12. 開発ロードマップ
 
-現在はPhase 3より先に **Phase 2.8 毎月1日の予算設定案内** を実機確認します。
+Phase 3より先に次を実機確認します。
+
+```text
+Phase 2.8 毎月1日の予算設定案内
+Phase 2.9 貸し借り管理
+Phase 2.10 機能ナビ + 機能追加要望収集
+```
 
 確認完了後にPhase 3Aへ進みます。
 
@@ -312,7 +398,7 @@ LINE通知:
 
 ---
 
-# 11. セキュリティ
+# 13. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
