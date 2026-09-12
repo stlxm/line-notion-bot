@@ -355,13 +355,23 @@ function normalizeSummitNotificationProduct_(value) {
     text = text.normalize("NFKC");
   } catch (e) {}
 
-  return text
+  // Geminiの表記揺れを通知時だけ吸収する。Notion元データは変更しない。
+  text = text
     .replace(/[（(][^）)]*[）)]/g, "")
+    .replace(/(?:北海道|青森県|岩手県|宮城県|秋田県|山形県|福島県|茨城県|栃木県|群馬県|埼玉県|千葉県|東京都|神奈川県|新潟県|富山県|石川県|福井県|山梨県|長野県|岐阜県|静岡県|愛知県|三重県|滋賀県|京都府|大阪府|兵庫県|奈良県|和歌山県|鳥取県|島根県|岡山県|広島県|山口県|徳島県|香川県|愛媛県|高知県|福岡県|佐賀県|長崎県|熊本県|大分県|宮崎県|鹿児島県|沖縄県)産(?:ほか|他)?/g, "")
+    .replace(/国内産/g, "")
     .replace(/ケース購入/g, "")
     .replace(/1ケース/g, "")
     .replace(/ケース/g, "")
-    .replace(/[\s　]+/g, "")
+    .replace(/切りおとし/g, "切り落とし")
+    .replace(/切りおろし/g, "切り落とし")
+    .replace(/ソース焼きそば/g, "ソースやきそば")
+    // 実機で確認したOCR/生成揺れ。誤字側だけを正規化する。
+    .replace(/サーモンタラト/g, "サーモントラウト")
+    .replace(/[・･／/\-ー\s　]/g, "")
     .toLowerCase();
+
+  return text;
 }
 
 function normalizeSummitNotificationPrice_(value) {
@@ -376,21 +386,61 @@ function normalizeSummitNotificationPackage_(product, unit) {
   try {
     text = text.normalize("NFKC");
   } catch (e) {}
-  text = text.toLowerCase().replace(/[\s　]/g, "");
+  text = text.toLowerCase().replace(/[\s　、,]/g, "");
 
   const multi = text.match(/\d+(?:\.\d+)?(?:ml|l|g|kg)×\d+(?:本|缶|個|袋|パック)?/i);
   if (multi) return multi[0];
 
-  const single = text.match(/\d+(?:\.\d+)?(?:ml|l|g|kg)/i);
-  if (single) return single[0];
+  const weight = text.match(/\d+(?:\.\d+)?(?:ml|l|g|kg)/i);
+  if (weight) return weight[0];
+
+  const count = text.match(/\d+(?:本|切|個|袋|パック|束|食)入?/i);
+  if (count) return count[0];
 
   return "";
+}
+
+function summitNotificationProductFamily_(value) {
+  const key = normalizeSummitNotificationProduct_(value);
+  const families = [
+    ["ミニトマト", "ミニトマト"],
+    ["なす", "なす"],
+    ["長ねぎ", "長ねぎ"],
+    ["サーモントラウト", "サーモン"],
+    ["サーモン", "サーモン"],
+    ["豚かたロース", "豚かたロース"],
+    ["ブルガリアヨーグルト", "ブルガリアヨーグルト"],
+    ["ソースやきそば", "ソースやきそば"],
+  ];
+
+  for (let i = 0; i < families.length; i++) {
+    if (key.indexOf(families[i][0]) >= 0) return families[i][1];
+  }
+  return "";
+}
+
+function summitNotificationProductsLikelySame_(a, b) {
+  const aKey = normalizeSummitNotificationProduct_(a);
+  const bKey = normalizeSummitNotificationProduct_(b);
+  if (!aKey || !bKey) return false;
+  if (aKey === bKey) return true;
+
+  // 「埼玉県産ほかなす」vs「なす」など、説明が片側に付いただけなら同一扱い。
+  const shorter = aKey.length <= bKey.length ? aKey : bKey;
+  const longer = aKey.length > bKey.length ? aKey : bKey;
+  if (shorter.length >= 2 && longer.indexOf(shorter) >= 0) return true;
+
+  // 同価格・同容量の候補に限って、商品ファミリー一致も同一候補とする。
+  const aFamily = summitNotificationProductFamily_(a);
+  const bFamily = summitNotificationProductFamily_(b);
+  return !!(aFamily && aFamily === bFamily);
 }
 
 function chooseBetterSummitNotificationDeal_(a, b) {
   const aDays = flyerDealSpanDays_(a);
   const bDays = flyerDealSpanDays_(b);
 
+  // 同じ商品らしい候補なら、今日だけ/短期間の情報を月間情報より優先する。
   if (aDays !== bDays) return aDays < bDays ? a : b;
 
   const aLimited = /限り|限定|のみ/.test(String(a.notes || ""));
@@ -405,27 +455,51 @@ function chooseBetterSummitNotificationDeal_(a, b) {
     return String(a.unit || "").length > String(b.unit || "").length ? a : b;
   }
 
+  // 商品名が具体的な方を表示名として残す。
+  if (String(a.product || "").length !== String(b.product || "").length) {
+    return String(a.product || "").length > String(b.product || "").length ? a : b;
+  }
+
   return a;
 }
 
 function dedupeSummitNotificationDeals_(deals) {
-  const byKey = {};
+  const uniqueDeals = [];
 
   (deals || []).forEach(deal => {
-    const productKey = normalizeSummitNotificationProduct_(deal.product);
     const priceKey = normalizeSummitNotificationPrice_(deal.price);
     const packageKey = normalizeSummitNotificationPackage_(deal.product, deal.unit);
-    const key = [productKey, priceKey, packageKey].join("|");
 
-    if (!byKey[key]) {
-      byKey[key] = deal;
+    let duplicateIndex = -1;
+    for (let i = 0; i < uniqueDeals.length; i++) {
+      const existing = uniqueDeals[i];
+      const existingPriceKey = normalizeSummitNotificationPrice_(existing.price);
+      const existingPackageKey = normalizeSummitNotificationPackage_(existing.product, existing.unit);
+
+      // 価格が違うものは別商品として残す。
+      if (priceKey !== existingPriceKey) continue;
+
+      // 両方に容量/個数が読めていて違う場合も別商品として残す。
+      if (packageKey && existingPackageKey && packageKey !== existingPackageKey) continue;
+
+      if (!summitNotificationProductsLikelySame_(deal.product, existing.product)) continue;
+
+      duplicateIndex = i;
+      break;
+    }
+
+    if (duplicateIndex < 0) {
+      uniqueDeals.push(deal);
       return;
     }
 
-    byKey[key] = chooseBetterSummitNotificationDeal_(byKey[key], deal);
+    uniqueDeals[duplicateIndex] = chooseBetterSummitNotificationDeal_(
+      uniqueDeals[duplicateIndex],
+      deal
+    );
   });
 
-  return Object.keys(byKey).map(key => byKey[key]);
+  return uniqueDeals;
 }
 
 function prepareSummitNotificationDeals_(deals) {
