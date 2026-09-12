@@ -10,9 +10,47 @@ LINEを入口に、家計簿・予算・カード利用通知・固定費/サブ
 - `UI_DESIGN.md`: LINE UIとPostback設計ルール
 - `PHASE1_TEST.md`: カード自動化テスト
 - `PHASE2_TEST.md`: 月次・予算判断テスト
+- `FLYER_TEST.md`: サミットチラシ自動化テスト
 - `gas/README.md`: GAS固有設定
 
 機能変更時はREADME.md / SETUP.md / DEVELOPMENT.mdを更新し、UI変更時はUI_DESIGN.mdも更新します。
+
+---
+
+# サミット特売カレンダー・毎日通知
+
+対象店舗:
+
+```text
+サミット ミナノ分倍河原店
+https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
+```
+
+`gas/FlyerDeals.gs` が次を自動化します。
+
+```text
+サミット公式店舗ページを確認
+↓
+チラシiframe / 画像を取得
+↓
+取得できない場合は同店舗のトクバイページをフォールバック
+↓
+Geminiで商品名・価格・対象日を構造化
+↓
+Googleカレンダーへ日付ごとの特売予定を登録
+↓
+当日の特売をLINEへ毎朝通知
+```
+
+Googleカレンダーには商品ごとに大量のイベントを作らず、1日につき次の終日予定を1件だけ作ります。
+
+```text
+🛒 サミット特売（○件）
+```
+
+説明欄へ商品・価格・条件をまとめます。同じチラシが続く間は解析結果を再利用し、毎日同じ画像をGeminiへ送り直さない設計です。
+
+初回設定・テストは `FLYER_TEST.md` を参照してください。
 
 ---
 
@@ -213,15 +251,14 @@ AND 本人が自動登録ON
 # GAS推奨トリガー
 
 ```text
-checkCardEmails              → 1時間ごと
-sendDailyMemoReminder        → 毎日 朝8時ごろ
-sendDailyBudgetAlert         → 毎日 20時ごろ
-sendDailyCardPendingReminder → 毎日 20〜21時ごろ
-sendMonthEndCardCheck        → 毎日 21時ごろ
-sendWeeklyFinanceReport      → 毎週日曜 20時ごろ
+checkCardEmails                    → 1時間ごと
+runDailySummitFlyerAutomation      → 毎日 朝6〜7時台
+sendDailyMemoReminder              → 毎日 朝8時ごろ
+sendDailyBudgetAlert               → 毎日 20時ごろ
+sendDailyCardPendingReminder       → 毎日 20〜21時ごろ
+sendMonthEndCardCheck              → 毎日 21時ごろ
+sendWeeklyFinanceReport            → 毎週日曜 20時ごろ
 ```
-
-Phase 2では新しいGASトリガーは不要です。
 
 ---
 
@@ -230,6 +267,8 @@ Phase 2では新しいGASトリガーは不要です。
 Phase 1: `PHASE1_TEST.md`
 
 Phase 2: `PHASE2_TEST.md`
+
+チラシ自動化: `FLYER_TEST.md`
 
 障害対応: `MAINTENANCE.md`
 
