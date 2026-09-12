@@ -198,7 +198,7 @@ NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
 NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
 ```
 
-設定後、Renderを再デプロイしてください。
+設定後、Renderを再デプロイしてください。GitHubに機能ナビ修正を入れたあとも、LINEで新しい自然文判定を使うには最新版のRenderデプロイが必要です。
 
 ---
 
@@ -298,6 +298,8 @@ Render再デプロイ後、LINEで:
 機能確認 レシート入力
 レシート入力ってできる？
 貸し借りってある？
+貸し借りの記録ってできる？
+お金の貸し借りってできる？
 ```
 
 のように質問できます。
