@@ -149,47 +149,60 @@ Shufoo店舗ID: 264241
 - `gas/FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信ID単位の個別解析、確認待ち、生活カレンダー同期、確認済み通知、日次トリガー。
 - `FLYER_TEST.md`: 実機確認手順。
 
-## 2026-09-12 重要修正 — 名前ではなくShufoo配信IDで分離
+## 2026-09-12 重要修正 — 配信IDの検出をリンク+画像URLへ拡張
 
-実機テストで、9月1日から有効なチラシが3種類あるのに1件しか認識されないことを確認。
+実機テストでは、一覧ページのURLとしては1件しか検出できなかったが、同じページ内の画像URLには複数の配信IDが存在した。
 
-原因:
+確認できた画像URL由来ID例:
 
 ```text
-旧実装
-一覧ページから取得した複数画像をまとめてGeminiへ渡す
-↓
-Geminiに「別チラシ」を推定させる
-↓
-同期間/似た名称の複数チラシが1件へ統合される場合がある
+2187006858976
+9783726841844
+3487936841840
+4441736841834
+```
+
+Shufoo画像URL形式:
+
+```text
+.../c/YYYY/MM/DD/c/<配信ID>/img/image1_00.jpg
+```
+
+原因は2つあった。
+
+```text
+1. 個別ページリンクだけを探索していた
+2. {id, url} のオブジェクト配列に文字列用 uniqueStrings_ を使っていたため、
+   全要素が [object Object] 扱いになり最初の1件だけ残っていた
 ```
 
 修正後:
 
 ```text
-Shufoo一覧HTML
+Shufoo一覧/公式/iframe
 ↓
-/t/asp_iframe/shop/264241/<配信ID>/ を列挙
+個別リンクから配信ID抽出
++
+画像URLから配信ID抽出
 ↓
-配信IDごとにページ取得
+ID文字列をキーに重複除去
 ↓
-配信IDごとに画像取得
+配信IDごとに個別ページ取得
 ↓
-配信IDごとにGeminiを個別実行
+画像URLの配信IDが一致する画像だけを優先
 ↓
-掲載期間から 月間 / 週次 / 日替わり / その他 を判定
+配信IDごとにGemini個別解析
 ```
 
-確認済みの別配信ID例:
+チラシ名は表示用であり、同一性判定には使わない。
+
+Geminiを使わない軽量検出テストを追加:
 
 ```text
-9783726841844
-4441736841834
+testSummitShufooDeliveryIds
 ```
 
-同じ店舗でも配信IDが違えば必ず別チラシとして扱う。`チラシ名` は表示用であり、識別には使用しない。
-
-Notion変更:
+Notion:
 
 ```text
 チラシ一覧
@@ -198,8 +211,6 @@ Notion変更:
 生活カレンダー
 + 元チラシID Rich text
 ```
-
-重複キーも配信IDを含める。
 
 ## 安全仕様
 
@@ -227,7 +238,7 @@ applyLifeFlyerReviewsNow または次回日次処理
 - 20日以上: `月間`
 - 4〜19日: `週次`
 - 1〜2日: `日替わり`
-- その他: `その他`
+- 3日: `その他`
 - 画像/HTMLから期間が読めない場合は登録しない。
 
 最終日次入口:
@@ -273,10 +284,10 @@ Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 ```text
 1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
 2. FlyerDeals.gs はそのまま最新版を使用
-3. testSummitLifeFlyerParse を実行
-4. ログ先頭の「検出した配信ID」を確認
-5. 現在チラシが3種類なら配信IDも3件出ることを確認
-6. 9783726841844 と 4441736841834 が別IDとして出ることを確認
+3. testSummitShufooDeliveryIds を実行（Gemini消費なし）
+4. 候補配信ID / 検出した配信ID を確認
+5. 9783726841844 / 4441736841834 / 3487936841840 等が別IDとして出ることを確認
+6. IDが揃ったら testSummitLifeFlyerParse
 7. 各IDの imageUrls / 掲載期間 / 商品を確認
 8. testSummitLifeFlyerSync
 9. Notion「チラシ一覧 > 確認待ち」で配信IDごとに別行になっていることを確認
@@ -302,6 +313,9 @@ Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 - `特売カレンダー` を汎用 `生活カレンダー` へ変更。
 - 完成版GASを `FlyerLifeCalendar.gs` に統合。
 - 実機で複数チラシが1件へ統合される問題を発見。
-- チラシ名/画像グループ推定方式を廃止し、Shufoo `配信ID` 単位の個別取得・個別Gemini解析へ変更。
+- `配信ID` 単位の個別取得・個別Gemini解析へ変更。
+- 画像URLからも配信IDを抽出するよう改善。
+- オブジェクト配列を `uniqueStrings_` に渡して1件に潰していたバグを修正。
+- `testSummitShufooDeliveryIds` を追加。
 - `チラシ一覧.配信ID` / `生活カレンダー.元チラシID` を追加。
-- README / SETUP / DEVELOPMENT を配信ID方式へ更新。
+- README / SETUP / DEVELOPMENT を更新。
