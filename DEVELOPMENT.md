@@ -131,22 +131,21 @@ https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
 実装ファイル:
-- `gas/FlyerDeals.gs`: 公式ページ/チラシ画像取得、トクバイフォールバック、Gemini解析、LINE通知
-- `gas/FlyerNotion.gs`: Notion同期、重複防止、期限切れアーカイブ、日次トリガー
+- `gas/FlyerDeals.gs`: 公式ページ/チラシ画像取得、公開フォールバック、Gemini画像解析、Notion同期、重複防止、LINE通知、日次トリガー
 - `FLYER_TEST.md`: 実機確認
 
 処理:
 
 ```text
-期限切れNotionページをアーカイブ
+最新チラシ確認
 ↓
-最新チラシ取得
-↓
-Geminiで商品・価格・期間を構造化
+新しいチラシならGeminiで商品・価格・期間を構造化
 ↓
 Notion特売カレンダーDBへ同期
 ↓
-当日分をLINE通知
+Notionから今日分を再取得
+↓
+LINE通知
 ```
 
 Notion DB:
@@ -156,18 +155,20 @@ Notion DB:
 - `容量・単位` Rich text
 - `店舗` Select
 - `備考` Rich text
-- `チラシURL` URL
 - `優先度` Number
+- `チラシURL` URL
+- `チラシ識別` Rich text
 - `識別キー` Rich text
+- `有効` Checkbox
 - `更新日時` Date
 
 安全仕様:
 - 同一の店舗+商品+価格+単位+期間は`識別キー`で重複防止。
-- 終了日が今日より前のページだけを自動アーカイブ。
-- 今日・未来の特売は自動削除しない。
-- Notion APIの削除相当は`archived=true`。完全消去ではないが通常ビューから消える。
+- 新チラシ切替時、今日以降に残る旧チラシ行は`有効=false`。
+- 過去データは履歴として残す。
 - 同じチラシはキャッシュを再利用してGemini再解析を抑える。
-- 旧Googleカレンダー版トリガーは`installDailySummitFlyerNotionTrigger`で削除する。
+- 毎朝の通知は解析結果を直接使わず、Notionを読み直して送る。
+- Googleカレンダーは使用しない。
 
 実機確認順:
 
@@ -175,11 +176,11 @@ Notion DB:
 1. 特売カレンダーDB作成
 2. Integrationを接続
 3. GAS Script Propertiesへ NOTION_API_KEY / NOTION_FLYER_DATABASE_ID / GEMINI_API_KEY を設定
-4. FlyerDeals.gs と FlyerNotion.gs をApps Scriptへコピー
+4. FlyerDeals.gs をApps Scriptへコピー
 5. testSummitFlyerParse
-6. testSummitFlyerNotionSyncOnly
-7. testSummitFlyerNotionAutomation
-8. installDailySummitFlyerNotionTrigger
+6. testSummitFlyerAutomation
+7. testTodaySummitFlyerNotification
+8. installDailySummitFlyerTrigger
 ```
 
 ---
@@ -224,10 +225,10 @@ Phase 3へ勝手に進まない。次回はPhase 2.6の実機確認から再開�
 
 ```text
 1. Notion特売カレンダーDBを作成
-2. GASへ FlyerDeals.gs / FlyerNotion.gs をコピー
+2. GASへ FlyerDeals.gs をコピー
 3. Script Propertiesを設定
 4. FLYER_TEST.mdを上から確認
-5. 期限切れアーカイブと重複防止を確認
+5. Notion重複防止と旧チラシ無効化を確認
 6. 毎朝LINE通知を確認
 7. 問題なければPhase 2.6を完了扱いへ変更
 8. ユーザー指示があった場合だけPhase 3開始
@@ -243,10 +244,11 @@ Phase 3へ勝手に進まない。次回はPhase 2.6の実機確認から再開�
 - Phase 2.5として目的ベース案内を追加。
 - サミット特売自動化を追加。
 - 当初のGoogleカレンダー案からNotion特売カレンダーDB方式へ変更。
-- `gas/FlyerNotion.gs`を追加。
-- 期限切れ特売を毎日自動アーカイブする仕様を追加。
+- チラシ機能を`gas/FlyerDeals.gs` 1ファイルへ統合。
+- 新チラシ切替時に旧未来データを`有効=false`へ変更する仕様を追加。
 - 同一特売の重複防止を追加。
-- `FLYER_TEST.md` / README / SETUP / gas/READMEをNotion方式へ更新。
+- 通知前にNotionを読み直す設計へ変更。
+- `FLYER_TEST.md` / README / SETUP / gas/READMEを最終構成へ更新。
 
 ## 2026-09-11
 
