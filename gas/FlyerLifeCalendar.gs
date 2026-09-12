@@ -2,14 +2,15 @@
 // gas/FlyerDeals.gs と同じApps Scriptプロジェクトに置いてください。
 //
 // 方針:
-// - Shufooの /shop/264241/<配信ID>/ を1チラシとして扱う
-// - 配信IDごとにページ・画像を取得し、Geminiも個別解析
+// - Shufooの店舗ページ/画像URLから配信IDを列挙する
+// - /shop/264241/<配信ID>/ を1チラシとして扱う
+// - 配信IDごとにページ・画像を取得し、Geminiも個別解析する
 // - 新規チラシは確認待ち / 有効=false
 // - Notion「チラシ一覧」で確認済みにしたものだけ生活カレンダーで有効化
 
 const SUMMIT_SHUFOO_ROOT_URL = "https://asp.shufoo.net/t/asp_iframe/shop/264241/?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore";
 const SUMMIT_SHUFOO_SEED_URL = "https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore";
-const LIFE_FLYER_SIGNATURE_KEY = "SUMMIT_LIFE_FLYER_CATALOG_SIGNATURE_V2";
+const LIFE_FLYER_SIGNATURE_KEY = "SUMMIT_LIFE_FLYER_CATALOG_SIGNATURE_V3";
 const LIFE_FLYER_MAX_IDS = 12;
 const LIFE_FLYER_MAX_IMAGES_PER_ID = 4;
 
@@ -46,9 +47,24 @@ function testSummitLifeFlyerParse() {
   const flyers = analyzeShufooFlyersById_(catalog);
   Logger.log(JSON.stringify({
     sourceUrl: catalog.sourceUrl,
-    flyerPages: catalog.flyerPages.map(x => ({ id: x.id, url: x.url, imageUrls: x.images.map(i => i.url) })),
+    flyerPages: catalog.flyerPages.map(x => ({
+      id: x.id,
+      url: x.url,
+      imageUrls: x.images.map(i => i.url),
+    })),
     flyers: flyers,
   }, null, 2));
+}
+
+// Geminiを使わず、配信IDの検出だけ確認する軽量テスト。
+function testSummitShufooDeliveryIds() {
+  const catalog = collectShufooFlyerCatalog_();
+  Logger.log("検出した配信ID: " + JSON.stringify(catalog.flyerPages.map(x => x.id)));
+  Logger.log(JSON.stringify(catalog.flyerPages.map(x => ({
+    id: x.id,
+    url: x.url,
+    imageUrls: x.images.map(i => i.url),
+  })), null, 2));
 }
 
 function testSummitLifeFlyerSync() {
@@ -93,31 +109,46 @@ function installDailySummitLifeCalendarTrigger() {
 function getLifeFlyerListConfig_() {
   const databaseId = PropertiesService.getScriptProperties().getProperty("NOTION_FLYER_LIST_DATABASE_ID") || "";
   if (!databaseId) throw new Error("NOTION_FLYER_LIST_DATABASE_ID をScript Propertiesへ設定してください。");
-  return { databaseId };
+  return { databaseId: databaseId };
 }
 
 function collectShufooFlyerCatalog_() {
   const discoveryUrls = [SUMMIT_SHUFOO_ROOT_URL, SUMMIT_SHUFOO_SEED_URL, SUMMIT_FLYER_OFFICIAL_URL];
-  const htmlParts = [];
-  let flyerUrls = [];
+  let flyerEntries = [];
+  let discoveredImageUrls = [];
 
   discoveryUrls.forEach(url => {
     const response = fetchHtml_(url);
     if (!response.ok) return;
-    htmlParts.push(response.html);
-    flyerUrls = flyerUrls.concat(extractShufooFlyerUrls_(response.html, url));
+    flyerEntries = flyerEntries.concat(extractShufooFlyerUrls_(response.html, url));
+    const imgs = extractImageUrls_(response.html, url);
+    discoveredImageUrls = discoveredImageUrls.concat(imgs);
+    flyerEntries = flyerEntries.concat(extractShufooEntriesFromImageUrls_(imgs));
+
+    extractIframeUrls_(response.html, url).slice(0, 5).forEach(childUrl => {
+      const child = fetchHtml_(childUrl);
+      if (!child.ok) return;
+      flyerEntries = flyerEntries.concat(extractShufooFlyerUrls_(child.html, childUrl));
+      const childImgs = extractImageUrls_(child.html, childUrl);
+      discoveredImageUrls = discoveredImageUrls.concat(childImgs);
+      flyerEntries = flyerEntries.concat(extractShufooEntriesFromImageUrls_(childImgs));
+    });
   });
 
-  flyerUrls = uniqueStrings_(flyerUrls).slice(0, LIFE_FLYER_MAX_IDS);
-  if (flyerUrls.length === 0) {
+  // 重要: flyerEntries はオブジェクト配列なので uniqueStrings_ は使わない。
+  flyerEntries = dedupeShufooFlyerEntries_(flyerEntries).slice(0, LIFE_FLYER_MAX_IDS);
+
+  if (flyerEntries.length === 0) {
     const seedId = extractShufooFlyerId_(SUMMIT_SHUFOO_SEED_URL);
-    flyerUrls.push({ id: seedId, url: SUMMIT_SHUFOO_SEED_URL });
+    flyerEntries.push({ id: seedId, url: buildShufooFlyerUrl_(seedId) });
   }
 
+  Logger.log("候補配信ID: " + JSON.stringify(flyerEntries.map(x => x.id)));
+
   const flyerPages = [];
-  flyerUrls.forEach(entry => {
-    const page = collectSingleShufooFlyerPage_(entry.id, entry.url);
-    if (page) flyerPages.push(page);
+  flyerEntries.forEach(entry => {
+    const page = collectSingleShufooFlyerPage_(entry.id, entry.url, discoveredImageUrls);
+    if (page && page.images.length > 0) flyerPages.push(page);
   });
 
   const signatureMaterial = flyerPages.map(page => [
@@ -136,7 +167,6 @@ function collectShufooFlyerCatalog_() {
 
 function extractShufooFlyerUrls_(html, baseUrl) {
   const results = [];
-  const seen = {};
   const source = String(html || "").replace(/\\\//g, "/");
   const patterns = [
     /(?:https?:\/\/asp\.shufoo\.net)?\/t\/asp_iframe\/shop\/264241\/(\d{6,})\/?[^\s"'<>]*/gi,
@@ -147,19 +177,27 @@ function extractShufooFlyerUrls_(html, baseUrl) {
     let match;
     while ((match = regex.exec(source)) !== null) {
       const id = pIndex === 0 ? match[1] : match[2];
-      let url = pIndex === 0 ? match[0] : match[1];
-      if (!id || seen[id]) continue;
-      url = normalizeUrl_(url, baseUrl);
-      if (!url) continue;
-      if (url.indexOf("lp-chirashi=") < 0) {
-        url += (url.indexOf("?") >= 0 ? "&" : "?") + "lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore";
-      }
-      seen[id] = true;
-      results.push({ id: id, url: url });
+      if (!id) continue;
+      results.push({ id: id, url: buildShufooFlyerUrl_(id) });
     }
   });
-
   return results;
+}
+
+function extractShufooEntriesFromImageUrls_(imageUrls) {
+  const results = [];
+  (imageUrls || []).forEach(url => {
+    const id = extractShufooImageDeliveryId_(url);
+    if (id) results.push({ id: id, url: buildShufooFlyerUrl_(id) });
+  });
+  return results;
+}
+
+function extractShufooImageDeliveryId_(url) {
+  const text = String(url || "").replace(/\\\//g, "/");
+  // 例: https://ipqcache2.shufoo.net/smt/c/2026/08/27/c/9783726841844/img/image1_00.jpg
+  const match = text.match(/\/c\/\d{4}\/\d{2}\/\d{2}\/c\/(\d{6,})\/img\//i);
+  return match ? match[1] : "";
 }
 
 function extractShufooFlyerId_(url) {
@@ -167,12 +205,34 @@ function extractShufooFlyerId_(url) {
   return match ? match[1] : "";
 }
 
-function collectSingleShufooFlyerPage_(id, url) {
+function buildShufooFlyerUrl_(id) {
+  return `https://asp.shufoo.net/t/asp_iframe/shop/264241/${id}/?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore`;
+}
+
+function dedupeShufooFlyerEntries_(entries) {
+  const seen = {};
+  const results = [];
+  (entries || []).forEach(entry => {
+    const id = String((entry || {}).id || "").trim();
+    if (!id || seen[id]) return;
+    seen[id] = true;
+    results.push({ id: id, url: buildShufooFlyerUrl_(id) });
+  });
+  return results;
+}
+
+function imageUrlBelongsToDeliveryId_(url, id) {
+  const imageId = extractShufooImageDeliveryId_(url);
+  return imageId && imageId === String(id || "");
+}
+
+function collectSingleShufooFlyerPage_(id, url, discoveredImageUrls) {
   const response = fetchHtml_(url);
   if (!response.ok) return null;
 
   let htmlParts = [response.html];
   let imageUrls = extractImageUrls_(response.html, url);
+
   extractIframeUrls_(response.html, url).slice(0, 3).forEach(childUrl => {
     const child = fetchHtml_(childUrl);
     if (!child.ok) return;
@@ -180,14 +240,17 @@ function collectSingleShufooFlyerPage_(id, url) {
     imageUrls = imageUrls.concat(extractImageUrls_(child.html, childUrl));
   });
 
-  imageUrls = uniqueStrings_(imageUrls)
-    .filter(isLikelyFlyerImageUrl_)
-    .slice(0, LIFE_FLYER_MAX_IMAGES_PER_ID * 4);
+  // Shufooページが他配信の画像も含むことがあるため、配信IDが一致する画像を優先する。
+  imageUrls = imageUrls.concat((discoveredImageUrls || []).filter(x => imageUrlBelongsToDeliveryId_(x, id)));
+  imageUrls = uniqueStrings_(imageUrls).filter(isLikelyFlyerImageUrl_);
 
-  const images = fetchLifeFlyerImages_(imageUrls, LIFE_FLYER_MAX_IMAGES_PER_ID);
+  const matching = imageUrls.filter(x => imageUrlBelongsToDeliveryId_(x, id));
+  const fallback = imageUrls.filter(x => !extractShufooImageDeliveryId_(x));
+  const selected = matching.length > 0 ? matching : fallback;
+  const images = fetchLifeFlyerImages_(selected.slice(0, LIFE_FLYER_MAX_IMAGES_PER_ID * 4), LIFE_FLYER_MAX_IMAGES_PER_ID);
   const text = htmlToPlainText_(htmlParts.join("\n\n")).slice(0, 24000);
 
-  return { id: id, url: url, text: text, images: images };
+  return { id: String(id), url: buildShufooFlyerUrl_(id), text: text, images: images };
 }
 
 function fetchLifeFlyerImages_(urls, limit) {
@@ -233,6 +296,7 @@ function analyzeSingleShufooFlyerWithGemini_(page) {
   const apiKey = props.getProperty("GEMINI_API_KEY") || "";
   const model = props.getProperty("FLYER_GEMINI_MODEL") || "gemini-3.5-flash-lite";
   if (!apiKey) throw new Error("GEMINI_API_KEY をScript Propertiesへ設定してください。");
+  if (!page.images || page.images.length === 0) return null;
 
   const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
   const prompt = [
@@ -241,8 +305,9 @@ function analyzeSingleShufooFlyerWithGemini_(page) {
     `今日: ${today}`,
     `Shufoo配信ID: ${page.id}`,
     "この入力は1つの配信IDだけです。別のチラシと混ぜず、この配信IDだけを解析してください。",
-    "名前よりも掲載期間と内容を優先し、typeは期間に基づき 月間/週次/日替わり/その他 のいずれかにしてください。",
-    "20日以上なら月間、4〜19日なら週次、1〜2日中心なら日替わり、それ以外はその他。",
+    "表示用タイトルは補助情報です。チラシの同一性は名前ではなく配信IDで管理します。",
+    "typeは掲載期間に基づき 月間/週次/日替わり/その他 のいずれかにしてください。",
+    "20日以上なら月間、4〜19日なら週次、1〜2日なら日替わり、3日または判定不能はその他。",
     "商品名・価格・容量・対象日は画像または本文で読める内容だけを使い、推測で補わないでください。",
     "各商品に根拠画像URLをimage_urlへ入れてください。",
     "説明文なしのJSONだけを返してください。",
@@ -287,13 +352,15 @@ function sanitizeSingleLifeFlyer_(raw, page) {
   const end = normalizeDateString_(raw.end_date || raw.start_date);
   if (!start || !end) return null;
   const allowed = { "月間": true, "週次": true, "日替わり": true, "その他": true };
-  const type = allowed[raw.type] ? raw.type : inferLifeFlyerType_(start, end);
+  const inferred = inferLifeFlyerType_(start, end);
+  const type = allowed[raw.type] ? raw.type : inferred;
   const imageUrls = (page.images || []).map(x => x.url);
   const deals = (Array.isArray(raw.deals) ? raw.deals : []).map(item => {
     const startDate = normalizeDateString_(item.start_date || start);
     const endDate = normalizeDateString_(item.end_date || item.start_date || end || start);
     if (!item.product || !startDate || !endDate) return null;
-    const imageUrl = /^https?:\/\//.test(String(item.image_url || "")) ? String(item.image_url) : (imageUrls[0] || "");
+    let imageUrl = /^https?:\/\//.test(String(item.image_url || "")) ? String(item.image_url) : (imageUrls[0] || "");
+    if (imageUrls.indexOf(imageUrl) < 0) imageUrl = imageUrls[0] || "";
     return {
       product: String(item.product).trim().slice(0, 120),
       price: String(item.price || "").trim().slice(0, 80),
@@ -448,7 +515,7 @@ function applyLifeFlyerReviews_() {
     });
     if (active) confirmed++; else rejected++;
   });
-  return { confirmed, rejected };
+  return { confirmed: confirmed, rejected: rejected };
 }
 
 function disableExpiredLifeFlyerEvents_() {
@@ -460,7 +527,9 @@ function disableExpiredLifeFlyerEvents_() {
     if (!notionCheckbox_(p["有効"], false)) return;
     const range = notionDateRange_(p["日付"]);
     if (!range.end || range.end >= today) return;
-    notionRequest_(`https://api.notion.com/v1/pages/${page.id}`, "patch", { properties: { "有効": { checkbox: false } } });
+    notionRequest_(`https://api.notion.com/v1/pages/${page.id}`, "patch", {
+      properties: { "有効": { checkbox: false } }
+    });
   });
 }
 
@@ -487,7 +556,9 @@ function getTodayConfirmedLifeFlyerDeals_() {
       sourceUrl: notionUrl_(p["元画像URL"]) || notionUrl_(p["チラシURL"]),
     });
   });
-  return deals.sort((a, b) => a.priority - b.priority || a.product.localeCompare(b.product, "ja")).slice(0, FLYER_MAX_DEALS_PER_DAY);
+  return deals
+    .sort((a, b) => a.priority - b.priority || a.product.localeCompare(b.product, "ja"))
+    .slice(0, FLYER_MAX_DEALS_PER_DAY);
 }
 
 function queryAllLifePages_(databaseId) {
@@ -514,7 +585,12 @@ function findLifePageByRichText_(databaseId, propertyName, value) {
 
 function sendLifeFlyerReviewNotice_(flyers) {
   if (!flyers || flyers.length === 0) return;
-  const lines = ["🆕 サミットのチラシを読み取りました", "", "Notion『チラシ一覧 → 確認待ち』で画像と内容を確認してください。", ""];
+  const lines = [
+    "🆕 サミットのチラシを読み取りました",
+    "",
+    "Notion『チラシ一覧 → 確認待ち』で画像と内容を確認してください。",
+    ""
+  ];
   flyers.slice(0, 8).forEach(f => {
     lines.push(`・${f.type} / ID ${f.id}`);
     lines.push(`  ${f.start_date}${f.end_date !== f.start_date ? "〜" + f.end_date : ""}`);
