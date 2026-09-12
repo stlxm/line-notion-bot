@@ -6,6 +6,8 @@ import requests
 import card_queue
 import finance_phase2
 import help_guide
+import feature_guide
+import loan_manager
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -81,14 +83,24 @@ def build_phase2_help():
         "2C 将来予測・目標\n"
         "・年間予測\n"
         "・貯金目標\n\n"
-        "目的から探すなら「？」、今やることを見るなら「おすすめ」。"
+        "2.9 貸し借り\n"
+        "・貸した / 借りた / 貸し借り一覧 / 精算\n\n"
+        "目的から探すなら「？」、機能があるか聞くなら「機能確認 ○○」。"
     )
 
 
 def handle_text_command(text):
-    """Phase 2と案内系の同期コマンドを処理。該当しない場合はNoneを返す。"""
+    """Phase 2・貸し借り・機能案内系の同期コマンドを処理。該当しない場合はNoneを返す。"""
     message = (text or "").strip()
     lowered = message.lower()
+
+    feature_reply = feature_guide.handle_feature_question(message)
+    if feature_reply is not None:
+        return feature_reply
+
+    loan_reply = loan_manager.handle_text_command(message)
+    if loan_reply is not None:
+        return loan_reply
 
     # 新しい目的ベースのヘルプ。app.py後半の旧ヘルプより先に処理される。
     if message in ["？", "?", "ヘルプ", "使い方"] or lowered == "help":
