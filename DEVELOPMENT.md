@@ -100,7 +100,7 @@ AI Model  → 現在モデル確認
 
 # Phase 2.5 — 目的ベースの案内
 
-状態: **実装完了・要実機確認**
+状態: **実装完了・実機動作確認済み**
 
 ```text
 ？
@@ -119,7 +119,7 @@ AI Model  → 現在モデル確認
 
 ---
 
-# Phase 2.6 — サミット特売Notionカレンダー
+# Phase 2.6 — サミット特売Notionカレンダー基盤
 
 状態: **実装完了・要実機確認**
 
@@ -130,58 +130,104 @@ AI Model  → 現在モデル確認
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
-実装ファイル:
-- `gas/FlyerDeals.gs`: 公式ページ/チラシ画像取得、公開フォールバック、Gemini画像解析、Notion同期、重複防止、LINE通知、日次トリガー
-- `FLYER_TEST.md`: 実機確認
-
-処理:
-
-```text
-最新チラシ確認
-↓
-新しいチラシならGeminiで商品・価格・期間を構造化
-↓
-Notion特売カレンダーDBへ同期
-↓
-Notionから今日分を再取得
-↓
-LINE通知
-```
-
-Notion DB:
-- `商品名` Title
-- `特売日` Date
-- `価格` Rich text
-- `容量・単位` Rich text
-- `店舗` Select
-- `備考` Rich text
-- `優先度` Number
-- `チラシURL` URL
-- `チラシ識別` Rich text
-- `識別キー` Rich text
-- `有効` Checkbox
-- `更新日時` Date
-
-安全仕様:
-- 同一の店舗+商品+価格+単位+期間は`識別キー`で重複防止。
-- 新チラシ切替時、今日以降に残る旧チラシ行は`有効=false`。
-- 過去データは履歴として残す。
-- 同じチラシはキャッシュを再利用してGemini再解析を抑える。
-- 毎朝の通知は解析結果を直接使わず、Notionを読み直して送る。
+基盤:
+- `gas/FlyerDeals.gs`: HTML/iframe/画像取得、Gemini画像解析、Notion/LINE共通処理。
+- Notion `特売カレンダー` DBを作成済み。
+- `特売日`のカレンダービューを作成済み。
 - Googleカレンダーは使用しない。
 
-実機確認順:
+---
+
+# Phase 2.7 — 月間チラシ一覧・画像確認フロー
+
+状態: **実装完了・要実機確認**
+
+追加要望:
+- 月初に配信される1か月分のチラシも読み取る。
+- Shufooのチラシ一覧を取得元として利用する。
+- チラシ名 / 掲載期間 / URL / 画像URLを一覧管理する。
+- 画像と抽出結果を確認してから特売情報を有効化する。
+
+Shufoo対象:
 
 ```text
-1. 特売カレンダーDB作成
-2. Integrationを接続
-3. GAS Script Propertiesへ NOTION_API_KEY / NOTION_FLYER_DATABASE_ID / GEMINI_API_KEY を設定
-4. FlyerDeals.gs をApps Scriptへコピー
-5. testSummitFlyerParse
-6. testSummitFlyerAutomation
-7. testTodaySummitFlyerNotification
-8. installDailySummitFlyerTrigger
+https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
 ```
+
+実装ファイル:
+- `gas/FlyerDeals.gs`: 共通取得・Notion・LINE処理。
+- `gas/FlyerReview.gs`: Shufoo一覧取得、複数チラシ解析、月間/週次/日替わり分類、確認待ち同期。
+- `gas/FlyerReviewedNotify.gs`: 確認済みだけを日次通知する安全な入口。
+- `FLYER_TEST.md`: 実機確認手順。
+
+Notion `チラシ一覧` DBを作成済み:
+- `チラシ名` Title
+- `種別` Select (`月間 / 週次 / 日替わり / その他`)
+- `掲載期間` Date
+- `元URL` URL
+- `画像URL` URL
+- `画像一覧` Rich text
+- `抽出件数` Number
+- `抽出サマリー` Rich text
+- `確認状態` Select (`確認待ち / 確認済み / 要修正`)
+- `チラシ識別` Rich text
+- `取得日時` Date
+
+作成済みビュー:
+- `確認待ち`
+- `月間チラシ`
+
+`特売カレンダー`へ追加済み:
+- `元チラシ名` Rich text
+- `元画像URL` URL
+- `確認状態` Select
+
+安全仕様:
+
+```text
+新チラシ検出
+↓
+Gemini画像解析
+↓
+チラシ一覧 = 確認待ち
+特売商品 = 確認待ち / 有効=false
+↓
+画像URLと抽出サマリーを人が確認
+↓
+正しい → チラシ一覧を確認済みに変更
+誤り   → 要修正
+↓
+applyFlyerReviewsNow または次回日次処理
+↓
+確認済み由来だけ 有効=true
+↓
+確認済み + 有効=true + 今日対象だけLINE通知
+```
+
+月間判定:
+- 掲載期間が約20日以上なら `月間`。
+- 約4日以上なら `週次`。
+- 1〜2日中心なら `日替わり`。
+- 画像/HTMLから期間が読み取れない場合は推測で確定しない。
+
+最終の日次入口は必ず:
+
+```text
+runDailySummitFlyerCatalogReviewedAutomation
+```
+
+トリガー作成は:
+
+```text
+installDailySummitFlyerReviewedTrigger
+```
+
+この関数は旧チラシトリガーを削除して、安全な確認済み通知へ切り替える。
+
+注意:
+- `runDailySummitFlyerCatalogAutomation` は確認済み限定通知の最終入口ではない。運用トリガーに使わない。
+- Shufooの実際のHTML/画像配信形式はGAS実行で未確認。`testSummitFlyerCatalogParse`で必ず実機確認する。
+- Geminiの画像認識結果も自動で正解扱いしない。
 
 ---
 
@@ -191,7 +237,7 @@ Notion DB:
 
 対象: #32, #33, #34, #36, #37, #38, #39, #40, #45, #46
 
-今後Phase 3も量が多ければ3A / 3B / 3Cへ細分化して実装する。
+Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 
 ---
 
@@ -199,19 +245,13 @@ Notion DB:
 
 状態: 未着手
 
----
-
 # Phase 5 — AI品質
 
 状態: 未着手
 
----
-
 # Phase 6 — 信頼性
 
 状態: 未着手
-
----
 
 # Phase 7 — 特殊家計・出力
 
@@ -221,17 +261,20 @@ Notion DB:
 
 # 次に再開する場所
 
-Phase 3へ勝手に進まない。次回はPhase 2.6の実機確認から再開する。
-
 ```text
-1. Notion特売カレンダーDBを作成
-2. GASへ FlyerDeals.gs をコピー
-3. Script Propertiesを設定
-4. FLYER_TEST.mdを上から確認
-5. Notion重複防止と旧チラシ無効化を確認
-6. 毎朝LINE通知を確認
-7. 問題なければPhase 2.6を完了扱いへ変更
-8. ユーザー指示があった場合だけPhase 3開始
+1. Apps Scriptへ FlyerDeals.gs / FlyerReview.gs / FlyerReviewedNotify.gs をコピー
+2. Script Propertiesへ NOTION_FLYER_DATABASE_ID / NOTION_FLYER_LIST_DATABASE_ID / NOTION_API_KEY / GEMINI_API_KEY を設定
+3. testSummitFlyerCatalogParse を実行
+4. ログで画像URL・複数チラシ・月間判定を確認
+5. testSummitFlyerCatalogAutomation を実行
+6. Notion「チラシ一覧 > 確認待ち」で画像と抽出結果を照合
+7. 正しいチラシを「確認済み」に変更
+8. applyFlyerReviewsNow を実行
+9. 特売カレンダー側が 確認済み / 有効=true になったことを確認
+10. testTodayConfirmedSummitFlyerNotification を実行
+11. installDailySummitFlyerReviewedTrigger を一度だけ実行
+12. 問題なければPhase 2.7を完了扱いへ変更
+13. ユーザー指示があった場合だけPhase 3開始
 ```
 
 ---
@@ -241,14 +284,17 @@ Phase 3へ勝手に進まない。次回はPhase 2.6の実機確認から再開�
 ## 2026-09-12
 
 - Phase 2を2A / 2B / 2Cへ細分化。
-- Phase 2.5として目的ベース案内を追加。
-- サミット特売自動化を追加。
-- 当初のGoogleカレンダー案からNotion特売カレンダーDB方式へ変更。
-- チラシ機能を`gas/FlyerDeals.gs` 1ファイルへ統合。
-- 新チラシ切替時に旧未来データを`有効=false`へ変更する仕様を追加。
-- 同一特売の重複防止を追加。
-- 通知前にNotionを読み直す設計へ変更。
-- `FLYER_TEST.md` / README / SETUP / gas/READMEを最終構成へ更新。
+- Phase 2.5として目的ベース案内を追加し、実機動作確認済み。
+- サミット特売Notionカレンダー基盤を追加。
+- 月初の1か月チラシ対応を追加。
+- Shufooチラシ一覧URLを取得元へ追加。
+- Notion `チラシ一覧` DBを作成。
+- `確認待ち` / `月間チラシ` ビューを作成。
+- 特売カレンダーに元チラシ・元画像・確認状態を追加。
+- 新規解析データを確認前は `有効=false` にする安全仕様へ変更。
+- `FlyerReview.gs` / `FlyerReviewedNotify.gs` を追加。
+- 確認済みだけを日次LINE通知する最終トリガーへ変更。
+- README / SETUP / DEVELOPMENT / FLYER_TEST / gas/README を更新。
 
 ## 2026-09-11
 
