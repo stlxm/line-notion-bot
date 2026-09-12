@@ -11,12 +11,15 @@ def _message_button(label, text, style="primary"):
     }
 
 
-def _postback_button(label, data, style="primary"):
+def _postback_button(label, data, style="primary", display_text=None):
+    action = {"type": "postback", "label": label[:20], "data": data}
+    # Postbackは通常トーク画面に何も出ないため、押した瞬間に操作が見えるようdisplayTextを付ける。
+    action["displayText"] = (display_text or f"▶ {label}")[:300]
     return {
         "type": "button",
         "style": style,
         "height": "sm",
-        "action": {"type": "postback", "label": label[:20], "data": data},
+        "action": action,
     }
 
 
@@ -34,15 +37,16 @@ def create_main_menu_flex():
     """現在使える機能を大分類で見やすくまとめる。"""
     body = [{
         "type": "text",
-        "text": "使いたい機能を選んでください。迷ったら「目的から探す」か「今のおすすめ」を使えます。",
+        "text": "使いたい機能を選んでください。迷ったら「目的から探す」か「この機能ある？」を使えます。",
         "size": "sm", "color": "#666666", "wrap": True,
     }]
 
     body += _section(
         "✨ 迷ったら",
-        "コマンドを覚えなくても、目的や現在の状況から探せます",
+        "目的から探す・機能の有無を確認する・今やることを見る",
         [
             _message_button("目的から探す", "？"),
+            _message_button("この機能ある？", "機能確認"),
             _message_button("今のおすすめ", "おすすめ"),
             _message_button("全コマンド一覧", "コマンド", "secondary"),
         ],
@@ -54,7 +58,7 @@ def create_main_menu_flex():
         "記録、今月の状況、予算判断、月次レビュー",
         [
             _message_button("今月のダッシュボード", "今月"),
-            _postback_button("支出を入力する", "action=quick_input_kakeibo"),
+            _postback_button("支出を入力する", "action=quick_input_kakeibo", display_text="▶ 支出を入力する"),
             _message_button("家計判断メニュー", "家計判断"),
             _message_button("今日使える額", "今日使える"),
             _message_button("支出ペースを見る", "ペース"),
@@ -64,6 +68,26 @@ def create_main_menu_flex():
             _message_button("固定費一覧を見る", "固定費一覧"),
         ],
         "#1DB446",
+    )
+
+    body += _section(
+        "✏️ 修正・取り消し",
+        "直前に登録した家計簿を確認して、安全に修正・取り消しできます",
+        [
+            _message_button("直前登録を確認・修正", "直前登録"),
+            _message_button("直前登録を取り消す", "直前取り消し", "secondary"),
+        ],
+        "#D97706",
+    )
+
+    body += _section(
+        "💸 貸し借り",
+        "貸した・借りた記録と未精算の確認",
+        [
+            _message_button("貸し借り一覧", "貸し借り一覧"),
+            _message_button("貸し借りの使い方", "機能確認 貸し借り", "secondary"),
+        ],
+        "#00897B",
     )
 
     body += _section(
@@ -80,7 +104,7 @@ def create_main_menu_flex():
         "📝 メモ",
         "追加、一覧、確認付き削除",
         [
-            _postback_button("メモを追加する", "action=quick_input_memo"),
+            _postback_button("メモを追加する", "action=quick_input_memo", display_text="▶ メモを追加する"),
             _message_button("メモ一覧を見る", "メモ一覧"),
             _message_button("メモを削除する", "メモ削除", "secondary"),
         ],
