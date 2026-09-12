@@ -214,17 +214,9 @@ Shufooでは次のURLの `<配信ID>` 部分を1チラシの実体として扱�
 .../c/YYYY/MM/DD/c/<配信ID>/img/image1_00.jpg
 ```
 
-例:
-
-```text
-9783726841844
-4441736841834
-3487936841840
-```
-
 同じ店舗でも配信IDが違えば別チラシです。名前ではまとめません。
 
-Apps Scriptへコピーするファイルは2つです。
+Apps Scriptへコピーする完成版ファイルは2つです。
 
 ```text
 gas/FlyerDeals.gs
@@ -233,7 +225,9 @@ gas/FlyerLifeCalendar.gs
 
 役割:
 - `FlyerDeals.gs`: HTML/iframe/画像取得、Notion/LINE共通関数
-- `FlyerLifeCalendar.gs`: Shufooリンク/画像URLから配信ID列挙、配信IDごとの個別画像解析、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
+- `FlyerLifeCalendar.gs`: Shufooリンク/画像URLから配信ID列挙、配信IDごとの個別画像解析、再試行、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
+
+Recovery/Debug用ファイルは診断時だけの一時ファイルで、完成版には不要です。
 
 ## GAS Script Properties
 
@@ -286,21 +280,27 @@ Shufoo一覧/公式ページを取得
 ↓
 その配信IDと一致する画像だけを優先
 ↓
-配信IDごとにGemini解析
+通常Gemini解析
 ↓
-掲載期間から 月間 / 週次 / 日替わり / その他 を判定
+日付なし / 商品0件ならそのIDだけ厳密再解析（temperature=0）
+↓
+必要なら商品日付の最小〜最大からチラシ期間を復元
+↓
+全配信IDが解析成功した場合のみNotionへ同期
 ```
 
-目安:
+種別の目安:
 
 ```text
 20日以上 → 月間
-4〜19日  → 週次
+3〜19日  → 週次
 1〜2日   → 日替わり
-3日      → その他
+判定不能 → その他
 ```
 
-画像/HTMLから期間が読めない場合は推測で確定しません。
+画像/HTMLから期間が読めない場合は推測で確定しません。ただし、画像から商品ごとの対象日が明確に読めている場合は、その最小開始日〜最大終了日をチラシ期間の救済値として使います。
+
+重要: 5件検出して3件しか解析できないような場合は **Notionへ3件だけ部分同期しません**。解析失敗IDをログへ出して処理を止めます。
 
 ---
 
@@ -343,16 +343,18 @@ applyLifeFlyerReviewsNow
 
 ```text
 1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
-2. testSummitShufooDeliveryIds
-3. 実行ログの「候補配信ID」「検出した配信ID」を確認
-4. 期待する配信IDが揃ったら testSummitLifeFlyerParse
-5. testSummitLifeFlyerSync
-6. Notion「チラシ一覧 > 確認待ち」で配信ID・画像・抽出結果を確認
-7. 正しいチラシを「確認済み」に変更
-8. applyLifeFlyerReviewsNow
-9. 生活カレンダーで 種類=特売 / 確認済み / 有効=true を確認
-10. testTodayLifeCalendarFlyerNotification
-11. installDailySummitLifeCalendarTrigger
+2. 診断用に追加した FlyerRecovery.gs / FlyerParseDebug.gs がある場合は削除
+3. testSummitShufooDeliveryIds
+4. 実行ログの「候補配信ID」「検出した配信ID」を確認
+5. 期待する配信IDが揃ったら testSummitLifeFlyerSync
+6. detected と analyzed が一致し、missing=[] であることを確認
+7. [同期OK] が全配信ID分出ることを確認
+8. Notion「チラシ一覧 > 確認待ち」で配信ID・画像・抽出結果を確認
+9. 正しいチラシを「確認済み」に変更
+10. applyLifeFlyerReviewsNow
+11. 生活カレンダーで 種類=特売 / 確認済み / 有効=true を確認
+12. testTodayLifeCalendarFlyerNotification
+13. installDailySummitLifeCalendarTrigger
 ```
 
 詳細は `FLYER_TEST.md`。
@@ -382,6 +384,11 @@ applyLifeFlyerReviewsNow
 - `候補配信ID` に画像URL由来のIDが複数出るか確認
 - 画像URL例 `.../c/YYYY/MM/DD/c/<配信ID>/img/...` のIDを抽出する
 - 候補は複数なのに `検出した配信ID` が減る場合は、各配信IDページの画像取得を確認
+
+検出はできるが解析件数が減る:
+- ログの `[解析再試行]` / `[解析NG]` を確認
+- 再試行後も失敗した場合は処理がNotion同期前に停止するのが正常
+- Liteモデルの無料枠を消費するため、同じテストを連続で何度も実行しない
 
 Notion同期失敗:
 - `NOTION_API_KEY`
