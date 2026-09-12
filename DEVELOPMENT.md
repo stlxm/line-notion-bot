@@ -101,12 +101,7 @@ AI Model  → 現在モデル確認
 
 状態: **実装完了・要実機確認**
 
-当初の `特売カレンダー` を汎用の `生活カレンダー` へ変更した。
-
-目的:
-- チラシ一覧DBは元資料の管理・確認に専念する。
-- 実際に日付で見る情報は生活カレンダーへ集約する。
-- 将来、特売以外に家計・引き落とし・給料・メモ・通常予定を同じカレンダーへ載せられるようにする。
+当初の `特売カレンダー` を汎用の `生活カレンダー` へ変更。
 
 生活カレンダー主項目:
 
@@ -126,15 +121,15 @@ AI Model  → 現在モデル確認
 特売 / 家計 / 引き落とし / 給料 / メモ / 予定 / その他
 ```
 
-チラシ由来行は価格・容量・店舗・元チラシ名・元画像URL・確認状態も保持する。
+チラシ由来行は `価格 / 容量・単位 / 店舗 / 元チラシID / 元チラシ名 / 元画像URL / 確認状態` も保持する。
 
-Database IDは互換性のため既存と同じ:
+Database ID:
 
 ```text
 684f959e451047389505a95ed368a7d6
 ```
 
-GAS Script Property名も当面 `NOTION_FLYER_DATABASE_ID` を継続利用するが、実体は生活カレンダーDB。
+GAS Script Property名は互換性のため `NOTION_FLYER_DATABASE_ID` を継続利用するが、実体は生活カレンダーDB。
 
 ---
 
@@ -146,58 +141,94 @@ GAS Script Property名も当面 `NOTION_FLYER_DATABASE_ID` を継続利用する
 
 ```text
 サミット ミナノ分倍河原店
-公式: https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
-Shufoo: https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
+Shufoo店舗ID: 264241
 ```
 
 最終実装ファイル:
-- `gas/FlyerDeals.gs`: 取得・Notion・LINE共通関数。
-- `gas/FlyerLifeCalendar.gs`: Shufoo一覧、月間判定、確認待ち、生活カレンダー同期、確認済み通知、日次トリガー。
+- `gas/FlyerDeals.gs`: HTML/iframe/画像取得、Notion/LINE共通関数。
+- `gas/FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信ID単位の個別解析、確認待ち、生活カレンダー同期、確認済み通知、日次トリガー。
 - `FLYER_TEST.md`: 実機確認手順。
 
-途中版 `FlyerReview.gs` / `FlyerReviewedNotify.gs` は使用しない。
+## 2026-09-12 重要修正 — 名前ではなくShufoo配信IDで分離
 
-Notion `チラシ一覧` DB:
-- `チラシ名` Title
-- `種別` Select (`月間 / 週次 / 日替わり / その他`)
-- `掲載期間` Date
-- `元URL` URL
-- `画像URL` URL
-- `画像一覧` Rich text
-- `抽出件数` Number
-- `抽出サマリー` Rich text
-- `確認状態` Select (`確認待ち / 確認済み / 要修正`)
-- `チラシ識別` Rich text
-- `取得日時` Date
+実機テストで、9月1日から有効なチラシが3種類あるのに1件しか認識されないことを確認。
 
-安全仕様:
+原因:
 
 ```text
-新チラシ検出
+旧実装
+一覧ページから取得した複数画像をまとめてGeminiへ渡す
 ↓
-Gemini画像解析
+Geminiに「別チラシ」を推定させる
+↓
+同期間/似た名称の複数チラシが1件へ統合される場合がある
+```
+
+修正後:
+
+```text
+Shufoo一覧HTML
+↓
+/t/asp_iframe/shop/264241/<配信ID>/ を列挙
+↓
+配信IDごとにページ取得
+↓
+配信IDごとに画像取得
+↓
+配信IDごとにGeminiを個別実行
+↓
+掲載期間から 月間 / 週次 / 日替わり / その他 を判定
+```
+
+確認済みの別配信ID例:
+
+```text
+9783726841844
+4441736841834
+```
+
+同じ店舗でも配信IDが違えば必ず別チラシとして扱う。`チラシ名` は表示用であり、識別には使用しない。
+
+Notion変更:
+
+```text
+チラシ一覧
++ 配信ID Rich text
+
+生活カレンダー
++ 元チラシID Rich text
+```
+
+重複キーも配信IDを含める。
+
+## 安全仕様
+
+```text
+新しい配信IDを検出
+↓
+その配信IDだけ画像解析
 ↓
 チラシ一覧 = 確認待ち
 生活カレンダー = 種類=特売 / 確認待ち / 有効=false
 ↓
-画像URLと抽出サマリーを人が確認
+画像URLと抽出内容を人が確認
 ↓
 正しい → チラシ一覧を確認済み
 誤り   → 要修正
 ↓
 applyLifeFlyerReviewsNow または次回日次処理
 ↓
-確認済み由来だけ 有効=true
+確認済みの配信ID由来だけ 有効=true
 ↓
 今日 + 確認済み + 有効=true の特売だけLINE通知
 ```
 
 月間判定:
 - 20日以上: `月間`
-- 4日以上: `週次`
+- 4〜19日: `週次`
 - 1〜2日: `日替わり`
 - その他: `その他`
-- 画像/HTMLから期間が読めない場合は推測で確定しない。
+- 画像/HTMLから期間が読めない場合は登録しない。
 
 最終日次入口:
 
@@ -216,8 +247,6 @@ installDailySummitLifeCalendarTrigger
 # Phase 3 — 入力・修正・検索
 
 状態: **未着手**
-
-対象: #32, #33, #34, #36, #37, #38, #39, #40, #45, #46
 
 Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 
@@ -239,28 +268,25 @@ Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 
 # 次に再開する場所
 
-ユーザーはPhase 2.5以降の手作業をまだしていない。
-
-次回の実機作業はこの順番:
+現在の再開位置:
 
 ```text
-1. Apps Scriptへ FlyerDeals.gs / FlyerLifeCalendar.gs をコピー
-2. GASタイムゾーンを Tokyo に設定
-3. Script Propertiesの LINE_USER_ID / LINE_CHANNEL_ACCESS_TOKEN を確認
-4. GEMINI_API_KEY / NOTION_API_KEY をGASへ設定
-5. NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
-6. NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
-7. Notion Integrationを生活カレンダー/チラシ一覧の両方へ接続
-8. testSummitLifeFlyerParse
-9. testSummitLifeFlyerSync
-10. チラシ一覧 > 確認待ち で画像と抽出内容を照合
-11. 正しいチラシを確認済みに変更
-12. applyLifeFlyerReviewsNow
-13. 生活カレンダーで 種類=特売 / 確認済み / 有効=true を確認
-14. testTodayLifeCalendarFlyerNotification
-15. installDailySummitLifeCalendarTrigger
-16. 問題なければPhase 2.7を完了扱いへ変更
-17. ユーザー指示があった場合だけPhase 3開始
+1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
+2. FlyerDeals.gs はそのまま最新版を使用
+3. testSummitLifeFlyerParse を実行
+4. ログ先頭の「検出した配信ID」を確認
+5. 現在チラシが3種類なら配信IDも3件出ることを確認
+6. 9783726841844 と 4441736841834 が別IDとして出ることを確認
+7. 各IDの imageUrls / 掲載期間 / 商品を確認
+8. testSummitLifeFlyerSync
+9. Notion「チラシ一覧 > 確認待ち」で配信IDごとに別行になっていることを確認
+10. 正しい配信IDを確認済みに変更
+11. applyLifeFlyerReviewsNow
+12. 生活カレンダーで 元チラシID / 確認済み / 有効=true を確認
+13. testTodayLifeCalendarFlyerNotification
+14. installDailySummitLifeCalendarTrigger
+15. 問題なければPhase 2.7を完了扱いへ変更
+16. ユーザー指示があった場合だけPhase 3開始
 ```
 
 ---
@@ -272,11 +298,10 @@ Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 - Phase 2を2A / 2B / 2Cへ細分化。
 - Phase 2.5の目的ベース案内を実装し、実機動作確認済み。
 - サミットチラシ自動化を追加。
-- 月初の月間チラシとShufoo一覧へ対応。
 - Notion `チラシ一覧` DBと確認ビューを作成。
 - `特売カレンダー` を汎用 `生活カレンダー` へ変更。
-- 生活カレンダーへ `種類 / 金額 / 内容` を追加。
-- チラシは `種類=特売` として生活カレンダーへ入れる設計へ変更。
 - 完成版GASを `FlyerLifeCalendar.gs` に統合。
-- 新規解析データは確認前 `有効=false`、確認済みのみ日次通知する安全仕様を維持。
-- README / SETUP / DEVELOPMENT / FLYER_TEST / gas/README を更新。
+- 実機で複数チラシが1件へ統合される問題を発見。
+- チラシ名/画像グループ推定方式を廃止し、Shufoo `配信ID` 単位の個別取得・個別Gemini解析へ変更。
+- `チラシ一覧.配信ID` / `生活カレンダー.元チラシID` を追加。
+- README / SETUP / DEVELOPMENT を配信ID方式へ更新。
