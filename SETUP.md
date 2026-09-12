@@ -109,6 +109,7 @@ Database ID:
 チラシURL
 チラシ識別
 識別キー
+元チラシID
 元チラシ名
 元画像URL
 確認状態
@@ -127,6 +128,7 @@ fdd0c0ce50974273b9b88f5272858e90
 | 名前 | 型 |
 |---|---|
 | `チラシ名` | Title |
+| `配信ID` | Rich text |
 | `種別` | Select (`月間/週次/日替わり/その他`) |
 | `掲載期間` | Date |
 | `元URL` | URL |
@@ -181,7 +183,7 @@ AI Model  → 現在モデル確認
 AI 質問   → 選択中モデルで回答
 ```
 
-LINE AIの既定はLiteです。チラシ画像解析も既定で `gemini-3.5-flash-lite` を使います。
+LINE AIの既定はLiteです。チラシ画像解析も `FLYER_GEMINI_MODEL` 未設定なら `gemini-3.5-flash-lite` を使います。
 
 ---
 
@@ -193,9 +195,27 @@ LINE AIの既定はLiteです。チラシ画像解析も既定で `gemini-3.5-fl
 公式店舗ページ:
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 
-Shufooチラシ一覧:
-https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
+Shufoo店舗ID:
+264241
+
+Shufoo一覧取得URL:
+https://asp.shufoo.net/t/asp_iframe/shop/264241/?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
 ```
+
+Shufooでは次のURLの `<配信ID>` 部分を1チラシの実体として扱います。
+
+```text
+/t/asp_iframe/shop/264241/<配信ID>/
+```
+
+例:
+
+```text
+/t/asp_iframe/shop/264241/9783726841844/
+/t/asp_iframe/shop/264241/4441736841834/
+```
+
+同じ店舗でも配信IDが違えば別チラシです。名前ではまとめません。
 
 Apps Scriptへコピーするファイルは2つです。
 
@@ -206,9 +226,7 @@ gas/FlyerLifeCalendar.gs
 
 役割:
 - `FlyerDeals.gs`: HTML/iframe/画像取得、Notion/LINE共通関数
-- `FlyerLifeCalendar.gs`: Shufoo一覧、月間/週次/日替わり判定、確認待ち登録、生活カレンダー同期、確認済み通知
-
-途中版の `FlyerReview.gs` / `FlyerReviewedNotify.gs` は使いません。
+- `FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信IDごとの個別画像解析、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
 
 ## GAS Script Properties
 
@@ -248,16 +266,45 @@ Apps Scriptタイムゾーン:
 
 ---
 
-# 7. 確認フロー
+# 7. チラシ検出・解析フロー
+
+```text
+Shufoo一覧を取得
+↓
+/shop/264241/<配信ID>/ を列挙
+↓
+配信IDごとにページを個別取得
+↓
+配信IDごとに画像を個別取得
+↓
+配信IDごとにGemini解析
+↓
+掲載期間から 月間 / 週次 / 日替わり / その他 を判定
+```
+
+目安:
+
+```text
+20日以上 → 月間
+4〜19日  → 週次
+1〜2日   → 日替わり
+その他   → その他
+```
+
+画像/HTMLから期間が読めない場合は推測で確定しません。
+
+---
+
+# 8. 確認フロー
 
 新しいチラシを読み取ると:
 
 ```text
-チラシ一覧 → 確認状態 = 確認待ち
-生活カレンダー → 種類=特売 / 確認状態=確認待ち / 有効=false
+チラシ一覧 → 配信IDごとに1行 / 確認状態=確認待ち
+生活カレンダー → 種類=特売 / 元チラシID=<配信ID> / 確認待ち / 有効=false
 ```
 
-Notionの `チラシ一覧 > 確認待ち` で画像・掲載期間・抽出内容を比較します。
+Notionの `チラシ一覧 > 確認待ち` で配信ID・画像・掲載期間・抽出内容を比較します。
 
 正しければ:
 
@@ -277,40 +324,26 @@ Notionの `チラシ一覧 > 確認待ち` で画像・掲載期間・抽出内�
 applyLifeFlyerReviewsNow
 ```
 
-確認済み由来の特売だけ `有効=true` になります。
+確認済みの配信ID由来の特売だけ `有効=true` になります。
 
 ---
 
-# 8. 月間チラシ
-
-月初に配信され、約20日以上の掲載期間を持つチラシは `月間` として扱います。
-
-目安:
-
-```text
-20日以上 → 月間
-4日以上  → 週次
-1〜2日   → 日替わり
-その他   → その他
-```
-
-画像/HTMLから期間が読めない場合は推測で確定しません。
-
----
-
-# 9. 初回テスト
+# 9. 初回・再テスト
 
 順番:
 
 ```text
-1. testSummitLifeFlyerParse
-2. testSummitLifeFlyerSync
-3. Notion「チラシ一覧 > 確認待ち」で画像と抽出結果を確認
-4. 正しいチラシを「確認済み」に変更
-5. applyLifeFlyerReviewsNow
-6. 生活カレンダーで 種類=特売 / 確認済み / 有効=true を確認
-7. testTodayLifeCalendarFlyerNotification
-8. installDailySummitLifeCalendarTrigger
+1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
+2. testSummitLifeFlyerParse
+3. 実行ログの「検出した配信ID」を確認
+4. 現在3種類あるなら配信IDが3件出ることを確認
+5. testSummitLifeFlyerSync
+6. Notion「チラシ一覧 > 確認待ち」で配信ID・画像・抽出結果を確認
+7. 正しいチラシを「確認済み」に変更
+8. applyLifeFlyerReviewsNow
+9. 生活カレンダーで 種類=特売 / 確認済み / 有効=true を確認
+10. testTodayLifeCalendarFlyerNotification
+11. installDailySummitLifeCalendarTrigger
 ```
 
 詳細は `FLYER_TEST.md`。
@@ -335,10 +368,10 @@ applyLifeFlyerReviewsNow
 
 # 11. トラブル時
 
-チラシ解析0件:
-- `testSummitLifeFlyerParse` の実行ログを見る
-- `GEMINI_API_KEY` / `FLYER_GEMINI_MODEL` を確認
-- Shufoo/公式サイトの画像配信形式変更を確認
+チラシが1件しか出ない:
+- `testSummitLifeFlyerParse` の最初の `検出した配信ID` を確認
+- 期待3件なのにIDが1件ならShufoo一覧のリンク抽出を確認
+- IDは複数なのにflyersが減るなら、各配信IDの掲載期間/画像解析ログを確認
 
 Notion同期失敗:
 - `NOTION_API_KEY`
