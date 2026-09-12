@@ -1,8 +1,12 @@
+import json
 import os
 import re
 from datetime import datetime, timezone, timedelta
 
 import requests
+
+import ai_engine
+import notion_helper
 
 JST = timezone(timedelta(hours=9), "JST")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
@@ -41,7 +45,8 @@ FEATURES = [
         "status": "implemented",
         "aliases": [
             "貸した", "借りた", "貸し借り", "貸借", "立替", "立て替え",
-            "貸し借りの記録", "貸し借り記録", "お金の貸し借り", "お金の貸し借り記録",
+            "貸し借り記録", "貸し借りの記録", "お金の貸し借り",
+            "お金を貸した記録", "お金を借りた記録", "返済記録",
         ],
         "usage": "「貸した 田中 3000 ランチ代」「借りた 田中 2000」「貸し借り一覧」「精算 田中 3000」が使えます。",
     },
@@ -101,6 +106,33 @@ FEATURES = [
     },
 ]
 
+# FEATURESの単純な別名一致で拾えない場合にGeminiへ渡す、現在のBot能力の補助一覧。
+# Geminiはこの一覧の範囲から「既存機能で実現できるか」を推定する。
+CURRENT_CAPABILITIES = [
+    "今月の家計簿ダッシュボード",
+    "支出登録（支出 金額 店名）",
+    "全体予算・ジャンル予算設定",
+    "毎月1日の予算設定案内",
+    "今日使える額",
+    "支出ペース判定",
+    "異常支出検知",
+    "予算提案",
+    "月締め・月締め確定",
+    "月次AIレビュー",
+    "年間支出予測",
+    "貯金目標の追加・確認・更新",
+    "週次レポート",
+    "固定費・サブスク管理",
+    "カード未処理分類・学習・自動登録",
+    "貸した・借りた・未精算一覧・精算",
+    "メモ保存・一覧・削除",
+    "URL保存",
+    "Notion任意DBへのデータ追加",
+    "AI質問（Lite / Flash切替）",
+    "目的ベースのヘルプ・おすすめ・コマンド一覧",
+    "サミット特売チラシ解析・生活カレンダー・LINE通知",
+]
+
 
 def _normalize(text):
     value = (text or "").strip().lower()
@@ -113,6 +145,9 @@ def _normalize(text):
 def _extract_feature_query(text):
     raw = (text or "").strip()
     normalized = raw.replace("　", " ")
+
+    if normalized == "機能確認":
+        return ""
 
     prefixes = ["機能確認 ", "機能ある？ ", "この機能ある？ ", "この機能ありますか？ "]
     for prefix in prefixes:
@@ -214,11 +249,65 @@ def _save_request(query, original_text):
         return False, "機能追加要望DBへの保存に失敗しました。"
 
 
-def handle_feature_question(text):
-    query = _extract_feature_query(text)
-    if not query:
+def _gemini_feature_judgement(query):
+    """静的別名で見つからない機能を、現在の機能一覧からGeminiに推定させる。"""
+    implemented = []
+    planned = []
+    for feature in FEATURES:
+        line = f"{feature['name']}: {feature['usage']}"
+        if feature["status"] == "implemented":
+            implemented.append(line)
+        else:
+            planned.append(line)
+
+    prompt = (
+        "あなたはLINE Notion Botの機能案内専用判定器です。\n"
+        "ユーザーが欲しい機能が、現在実装済みの機能を組み合わせれば実質的に利用できるか判定してください。\n"
+        "新しい機能を想像して『ある』と答えてはいけません。下記の実装済み機能と能力だけを根拠にしてください。\n"
+        "正式ロードマップ予定は現在利用不可なので available=false にしてください。ただし planned=true にしてください。\n"
+        "実装済み機能で実現できる場合だけ available=true にし、usageにはユーザーがそのままLINEで使える具体的なコマンド例を書いてください。\n"
+        "実現できない場合は available=false, planned=false にしてください。\n"
+        "必ずJSONだけで返してください。Markdownは禁止です。\n"
+        "形式: {\"available\":true|false,\"planned\":true|false,\"matched_feature\":\"機能名\",\"usage\":\"使い方\",\"reason\":\"短い理由\"}\n\n"
+        "【実装済み機能】\n" + "\n".join(implemented) + "\n"
+        "【現在の補助能力】\n" + "\n".join(f"・{x}" for x in CURRENT_CAPABILITIES) + "\n"
+        "【正式ロードマップ・未実装】\n" + "\n".join(planned) + "\n"
+        f"【確認したい機能】\n{query}"
+    )
+
+    try:
+        response = notion_helper.call_gemini_with_retry(ai_engine.get_selected_model(), prompt)
+        raw = (response.text or "").strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        return {
+            "available": bool(data.get("available")),
+            "planned": bool(data.get("planned")),
+            "matched_feature": str(data.get("matched_feature") or "").strip(),
+            "usage": str(data.get("usage") or "").strip(),
+            "reason": str(data.get("reason") or "").strip(),
+        }
+    except Exception as e:
+        print(f"機能確認Gemini判定エラー: {e}")
         return None
 
+
+def handle_feature_question(text):
+    query = _extract_feature_query(text)
+    if query is None:
+        return None
+
+    if not query:
+        return (
+            "確認したい機能名も一緒に送ってください。\n"
+            "例: 機能確認 貸し借り\n"
+            "例: 機能確認 レシート読み取り"
+        )
+
+    # 1段階目: 従来どおり、明示した機能名・別名から高速判定。
     feature = _find_feature(query)
     if feature:
         if feature["status"] == "implemented":
@@ -228,13 +317,39 @@ def handle_feature_question(text):
             f"{feature['usage']}\n\n重複要望になるため、機能追加要望DBには新規登録しませんでした。"
         )
 
-    saved, message = _save_request(query, text)
-    if saved:
+    # 2段階目: 名前だけでは判断できないときだけGeminiに既存機能から推定させる。
+    judgement = _gemini_feature_judgement(query)
+    if judgement:
+        if judgement["available"]:
+            matched = judgement["matched_feature"] or "既存機能"
+            usage = judgement["usage"] or judgement["reason"] or "既存機能で対応できます。"
+            return (
+                "✅ あります。既存機能から判断しました。\n"
+                f"【{matched}】\n{usage}"
+            )
+        if judgement["planned"]:
+            matched = judgement["matched_feature"] or query
+            detail = judgement["usage"] or judgement["reason"] or "正式ロードマップに入っています。"
+            return (
+                f"🛠️「{matched}」は現在まだ使えません。\n"
+                f"{detail}\n\n正式ロードマップ済みなので、機能追加要望DBには重複登録しませんでした。"
+            )
+
+        # Geminiも「ない」と判断した場合だけ、ユーザーが書いた機能名をそのまま要望DBへ保存。
+        saved, message = _save_request(query, text)
+        if saved:
+            return (
+                f"今のBotには「{query}」は見つかりませんでした。\n"
+                f"📝 {message}\n要望名は「{query}」のまま保存しました。"
+            )
         return (
-            f"今のBotには「{query}」に一致する機能は見つかりませんでした。\n"
-            f"📝 {message}\n将来の追加候補として確認できるようにしておきました。"
+            f"今のBotには「{query}」は見つかりませんでした。\n"
+            f"⚠️ {message}\nSETUP.mdの NOTION_FEATURE_REQUEST_DATABASE_ID を確認してください。"
         )
+
+    # Gemini障害は「機能なし」と同一視しない。誤って要望登録しない。
     return (
-        f"今のBotには「{query}」に一致する機能は見つかりませんでした。\n"
-        f"⚠️ {message}\nSETUP.mdの NOTION_FEATURE_REQUEST_DATABASE_ID を設定すると自動記録できます。"
+        f"「{query}」は通常の機能一覧では見つかりませんでした。\n"
+        "Geminiでの追加確認に失敗したため、今回は機能追加要望DBへ自動登録していません。\n"
+        "少し時間を置いて「機能確認 " + query + "」をもう一度送ってください。"
     )
