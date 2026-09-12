@@ -12,7 +12,10 @@
 const SUMMIT_FLYER_OFFICIAL_URL = "https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer";
 const SUMMIT_FLYER_STORE_NAME = "サミット ミナノ分倍河原店";
 const FLYER_MAX_IMAGE_BYTES = 6 * 1024 * 1024;
-const FLYER_MAX_DEALS_PER_DAY = 20;
+// FlyerLifeCalendar.gs 側で今日分を先に切り捨てないよう十分大きくしておく。
+// LINEへ実際に出す上限は FLYER_LINE_MAX_DEALS で管理する。
+const FLYER_MAX_DEALS_PER_DAY = 200;
+const FLYER_LINE_MAX_DEALS = 20;
 const NOTION_API_VERSION = "2022-06-28";
 
 // -----------------------------------------------------------------------------
@@ -330,18 +333,9 @@ function getTodaySummitDealsFromNotion_() {
     });
   });
 
-  const uniqueDeals = dedupeSummitNotificationDeals_(deals);
-
-  uniqueDeals.sort((a, b) => {
-    const aDays = flyerDealSpanDays_(a);
-    const bDays = flyerDealSpanDays_(b);
-    if (aDays !== bDays) return aDays - bDays;
-    if (a.priority !== b.priority) return a.priority - b.priority;
-    return a.product.localeCompare(b.product, "ja");
-  });
-
-  Logger.log(`[Notion今日分] ${today} / 元=${deals.length}件 / 重複整理後=${uniqueDeals.length}件`);
-  return uniqueDeals.slice(0, FLYER_MAX_DEALS_PER_DAY);
+  const prepared = prepareSummitNotificationDeals_(deals);
+  Logger.log(`[Notion今日分] ${today} / 元=${deals.length}件 / 重複整理後=${prepared.length}件`);
+  return prepared.slice(0, FLYER_LINE_MAX_DEALS);
 }
 
 function flyerDealSpanDays_(deal) {
@@ -384,7 +378,6 @@ function normalizeSummitNotificationPackage_(product, unit) {
   } catch (e) {}
   text = text.toLowerCase().replace(/[\s　]/g, "");
 
-  // 350ml×24 / 500ml×6 / 400g など、商品を区別する容量情報を優先。
   const multi = text.match(/\d+(?:\.\d+)?(?:ml|l|g|kg)×\d+(?:本|缶|個|袋|パック)?/i);
   if (multi) return multi[0];
 
@@ -398,7 +391,6 @@ function chooseBetterSummitNotificationDeal_(a, b) {
   const aDays = flyerDealSpanDays_(a);
   const bDays = flyerDealSpanDays_(b);
 
-  // 同じ商品が月間と短期の両方にある場合は、今日に近い短期情報を残す。
   if (aDays !== bDays) return aDays < bDays ? a : b;
 
   const aLimited = /限り|限定|のみ/.test(String(a.notes || ""));
@@ -436,26 +428,42 @@ function dedupeSummitNotificationDeals_(deals) {
   return Object.keys(byKey).map(key => byKey[key]);
 }
 
+function prepareSummitNotificationDeals_(deals) {
+  const uniqueDeals = dedupeSummitNotificationDeals_(deals || []);
+  uniqueDeals.sort((a, b) => {
+    const aDays = flyerDealSpanDays_(a);
+    const bDays = flyerDealSpanDays_(b);
+    if (aDays !== bDays) return aDays - bDays;
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return a.product.localeCompare(b.product, "ja");
+  });
+  return uniqueDeals;
+}
+
 // -----------------------------------------------------------------------------
 // LINE通知
 // -----------------------------------------------------------------------------
 
 function sendTodaySummitDealsToLine_(todaysDeals) {
   const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy-MM-dd");
+  // 日次本体から渡された配列にも、送信直前に必ず同じ整理を適用する。
+  const preparedDeals = prepareSummitNotificationDeals_(todaysDeals || [])
+    .slice(0, FLYER_LINE_MAX_DEALS);
+
   const lines = [
     `🛒 ${SUMMIT_FLYER_STORE_NAME}`,
     `【${today} の特売】`,
     "",
   ];
 
-  if (!todaysDeals || todaysDeals.length === 0) {
+  if (preparedDeals.length === 0) {
     lines.push(
       "今日の確認済み特売はNotionに登録されていません。",
       "必要なら店舗チラシを直接確認してください。"
     );
   } else {
-    const shortDeals = todaysDeals.filter(deal => flyerDealSpanDays_(deal) <= 7);
-    const longDeals = todaysDeals.filter(deal => flyerDealSpanDays_(deal) > 7);
+    const shortDeals = preparedDeals.filter(deal => flyerDealSpanDays_(deal) <= 7);
+    const longDeals = preparedDeals.filter(deal => flyerDealSpanDays_(deal) > 7);
 
     if (shortDeals.length > 0) {
       lines.push("🔥 今日・短期特売");
@@ -469,7 +477,7 @@ function sendTodaySummitDealsToLine_(todaysDeals) {
       lines.push("");
     }
 
-    lines.push(`今日の通知: ${todaysDeals.length}件`);
+    lines.push(`今日の通知: ${preparedDeals.length}件`);
   }
 
   lines.push(
