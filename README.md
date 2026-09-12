@@ -26,29 +26,33 @@ LINEを入口に、家計簿・予算・カード利用通知・固定費/サブ
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
-`gas/FlyerDeals.gs` と `gas/FlyerNotion.gs` が次を自動化します。
+`gas/FlyerDeals.gs` 1ファイルで次を自動化します。
 
 ```text
 サミット公式店舗ページを確認
 ↓
-チラシiframe / 画像を取得
+チラシiframe / 画像候補を取得
 ↓
-取得できない場合は同店舗のトクバイページをフォールバック
+必要時のみ公開フォールバックを利用
 ↓
-Geminiで商品名・価格・対象日を構造化
+新しいチラシだけGeminiで画像認識
 ↓
-Notion特売カレンダーDBへ商品ごとに登録
+商品名・価格・容量・対象日を構造化
 ↓
-期限切れページを自動アーカイブ
+Notion特売カレンダーDBへ同期
+↓
+Notionから今日の特売を読み直す
 ↓
 当日の特売をLINEへ毎朝通知
 ```
 
+Googleカレンダーは使用しません。Notion DBが特売情報の正本です。
+
 Notionでは`特売日`をDateプロパティにし、カレンダービューで確認します。期間特売はDateの開始〜終了として1ページで管理します。
 
-期限切れは、`特売日`の終了日が今日より前になった時点で自動的に`archived=true`へ変更します。Notion APIでは通常これが削除相当で、DB/カレンダービューから見えなくなります。
+同じ `店舗 + 商品 + 価格 + 容量 + 特売期間` は `識別キー` で重複を防ぎます。新しいチラシへ切り替わった場合、今日以降に残る旧チラシ行は `有効=false` にし、過去分は履歴として残します。
 
-同じ商品・価格・期間は`識別キー`で重複を防ぎ、再取得時は既存ページを更新します。同じチラシが続く間は解析結果を再利用し、毎日同じ画像をGeminiへ送り直さない設計です。
+同じチラシが続く間は保存済み解析結果を再利用し、毎日同じ画像をGeminiへ送り直しません。
 
 初回設定・テストは `FLYER_TEST.md` を参照してください。
 
@@ -183,9 +187,11 @@ AI改善
 | `容量・単位` | Rich text |
 | `店舗` | Select |
 | `備考` | Rich text |
-| `チラシURL` | URL |
 | `優先度` | Number |
+| `チラシURL` | URL |
+| `チラシ識別` | Rich text |
 | `識別キー` | Rich text |
+| `有効` | Checkbox |
 | `更新日時` | Date |
 
 ---
@@ -229,13 +235,13 @@ AND 本人が自動登録ON
 # GAS推奨トリガー
 
 ```text
-checkCardEmails                         → 1時間ごと
-runDailySummitFlyerNotionAutomation     → 毎日 朝6〜7時台
-sendDailyMemoReminder                   → 毎日 朝8時ごろ
-sendDailyBudgetAlert                    → 毎日 20時ごろ
-sendDailyCardPendingReminder            → 毎日 20〜21時ごろ
-sendMonthEndCardCheck                   → 毎日 21時ごろ
-sendWeeklyFinanceReport                 → 毎週日曜 20時ごろ
+checkCardEmails                    → 1時間ごと
+runDailySummitFlyerAutomation      → 毎日 朝6時台
+sendDailyMemoReminder              → 毎日 朝8時ごろ
+sendDailyBudgetAlert               → 毎日 20時ごろ
+sendDailyCardPendingReminder       → 毎日 20〜21時ごろ
+sendMonthEndCardCheck              → 毎日 21時ごろ
+sendWeeklyFinanceReport            → 毎週日曜 20時ごろ
 ```
 
 ---
