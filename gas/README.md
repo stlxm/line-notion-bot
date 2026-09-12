@@ -5,13 +5,14 @@ GASはカード監視・定期通知・サミットのチラシ取得を担当�
 主なファイル:
 
 ```text
-gas/Code.gs                 カード利用メール監視
-gas/FinanceReports.gs       家計簿定期通知
-gas/DailyMemo.gs            メモ通知
-gas/FlyerDeals.gs           チラシ取得・共通Notion/LINE処理
-gas/FlyerReview.gs          Shufooチラシ一覧・月間判定・確認待ち同期
-gas/FlyerReviewedNotify.gs  確認済みだけの日次通知
+gas/Code.gs                  カード利用メール監視
+gas/FinanceReports.gs        家計簿定期通知
+gas/DailyMemo.gs             メモ通知
+gas/FlyerDeals.gs            チラシ取得・共通Notion/LINE処理
+gas/FlyerLifeCalendar.gs     Shufoo一覧・月間判定・確認フロー・生活カレンダー同期
 ```
+
+`FlyerReview.gs` / `FlyerReviewedNotify.gs` は途中版のため使用しません。
 
 ---
 
@@ -35,6 +36,8 @@ NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```
 
+`NOTION_FLYER_DATABASE_ID` は互換名を残しており、現在はNotionの `生活カレンダー` を指します。
+
 任意:
 
 ```text
@@ -45,7 +48,7 @@ FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 
 ---
 
-# サミット特売・チラシ一覧
+# サミットチラシ → 生活カレンダー
 
 対象:
 
@@ -59,102 +62,87 @@ Shufoo一覧:
 https://asp.shufoo.net/t/asp_iframe/shop/264241/9783726841844?lp-chirashi=true&lp-timeline=true&lp-pickup=true&lp-coupon=true&lp-event=true&lp-shop-detail=false&un=summitstore
 ```
 
-## 役割
+役割:
 
 `FlyerDeals.gs`:
 
 ```text
 HTML / iframe / 画像URL取得
-Gemini画像解析の共通関数
 Notion API共通関数
 LINE通知共通関数
 ```
 
-`FlyerReview.gs`:
+`FlyerLifeCalendar.gs`:
 
 ```text
 Shufooチラシ一覧を取得
 ↓
-複数のチラシ画像を解析
+複数チラシを画像解析
 ↓
 月間 / 週次 / 日替わり / その他 に分類
 ↓
 チラシ一覧DBへ確認待ちで保存
 ↓
-商品を特売カレンダーへ 有効=false / 確認待ち で保存
-```
-
-`FlyerReviewedNotify.gs`:
-
-```text
-チラシ一覧の確認状態を商品へ反映
+生活カレンダーへ 種類=特売 / 有効=false で保存
 ↓
-確認済み + 有効=true + 今日対象だけ取得
+チラシ一覧の確認状態を反映
 ↓
-LINE通知
+確認済み + 有効=true + 今日対象の特売だけLINE通知
 ```
 
 ---
 
 # Notion確認フロー
 
-新しいチラシは自動で信用しません。
-
 ```text
 新チラシ
 ↓
 チラシ一覧 = 確認待ち
-商品 = 確認待ち / 有効=false
+生活カレンダー = 種類=特売 / 確認待ち / 有効=false
 ↓
-Notion「チラシ一覧 > 確認待ち」で確認
-↓
-画像URL / 掲載期間 / 抽出サマリーを照合
+Notion「チラシ一覧 > 確認待ち」で画像と抽出内容を照合
 ↓
 正しい → 確認済み
 誤り   → 要修正
 ```
 
-手動ですぐ反映する場合:
+手動ですぐ反映:
 
 ```text
-applyFlyerReviewsNow
+applyLifeFlyerReviewsNow
 ```
 
-確認済みのチラシ由来だけ商品が `有効=true` になります。
+確認済み由来だけ `有効=true` になります。
 
 ---
 
 # 月間チラシ
-
-月初に配信される長期チラシもShufoo一覧から取得します。
 
 目安:
 
 ```text
 掲載期間20日以上 → 月間
 掲載期間4日以上  → 週次
-1〜2日中心       → 日替わり
+1〜2日           → 日替わり
 それ以外         → その他
 ```
 
-Notion `チラシ一覧 > 月間チラシ` ビューで確認できます。
-
-月間・週次・日替わりは同時に保持できます。
+Notion `チラシ一覧 > 月間チラシ` で確認します。
 
 ---
 
 # 初回テスト
 
-1. チラシ一覧・画像解析のみ:
+1. 解析だけ:
 
 ```text
-testSummitFlyerCatalogParse
+testSummitLifeFlyerParse
 ```
 
 2. Notionへ確認待ち同期:
 
 ```text
-testSummitFlyerCatalogAutomation
+testSummitLifeFlyerSync
 ```
 
 3. Notionで画像と抽出内容を確認し、正しいチラシを `確認済み` に変更。
@@ -162,16 +150,16 @@ testSummitFlyerCatalogAutomation
 4. 状態反映:
 
 ```text
-applyFlyerReviewsNow
+applyLifeFlyerReviewsNow
 ```
 
-5. 確認済みだけ通知:
+5. 確認済み特売だけ通知:
 
 ```text
-testTodayConfirmedSummitFlyerNotification
+testTodayLifeCalendarFlyerNotification
 ```
 
-詳しくは `FLYER_TEST.md`。
+詳細は `FLYER_TEST.md`。
 
 ---
 
@@ -180,41 +168,16 @@ testTodayConfirmedSummitFlyerNotification
 一度だけ:
 
 ```text
-installDailySummitFlyerReviewedTrigger
+installDailySummitLifeCalendarTrigger
 ```
 
-を実行してください。
-
-この関数は旧チラシトリガー:
+最終入口:
 
 ```text
-runDailySummitFlyerAutomation
-runDailySummitFlyerNotionAutomation
-runDailySummitFlyerCatalogAutomation
+runDailySummitLifeCalendarAutomation
 ```
 
-を削除し、最終版:
-
-```text
-runDailySummitFlyerCatalogReviewedAutomation
-```
-
-を毎日6時台へ設定します。
-
-**運用では確認済み版だけを使います。**
-
----
-
-# Gemini利用量
-
-チラシ一覧・画像URL等から署名を作ります。
-
-```text
-変更なし → 画像解析しない
-変更あり → Gemini画像解析
-```
-
-ただしShufoo/サイト側のHTMLに毎回変化する値が含まれる場合は署名が変わる可能性があります。実機テストでログを確認してください。
+を毎日6時台へ設定します。旧チラシトリガーはインストール関数が削除します。
 
 ---
 
@@ -223,8 +186,6 @@ runDailySummitFlyerCatalogReviewedAutomation
 ```text
 checkCardEmails → 1時間ごと
 ```
-
-Gmail Message IDで同一メールの再処理を抑止します。
 
 対応カード:
 - JCB
@@ -237,12 +198,12 @@ Gmail Message IDで同一メールの再処理を抑止します。
 # 定期通知
 
 ```text
-runDailySummitFlyerCatalogReviewedAutomation → 毎日6時台
-sendDailyMemoReminder                        → 毎日朝8時ごろ
-sendDailyBudgetAlert                         → 毎日20時ごろ
-sendDailyCardPendingReminder                 → 毎日20〜21時ごろ
-sendMonthEndCardCheck                        → 毎日21時ごろ
-sendWeeklyFinanceReport                      → 毎週日曜20時ごろ
+runDailySummitLifeCalendarAutomation → 毎日6時台
+sendDailyMemoReminder               → 毎日朝8時ごろ
+sendDailyBudgetAlert               → 毎日20時ごろ
+sendDailyCardPendingReminder       → 毎日20〜21時ごろ
+sendMonthEndCardCheck              → 毎日21時ごろ
+sendWeeklyFinanceReport            → 毎週日曜20時ごろ
 ```
 
 ---
@@ -251,12 +212,11 @@ sendWeeklyFinanceReport                      → 毎週日曜20時ごろ
 
 GitHubの`.gs`更新はApps Scriptへ自動反映されません。
 
-チラシ機能で今回コピーするファイル:
+チラシ機能でコピーするのは:
 
 ```text
 gas/FlyerDeals.gs
-gas/FlyerReview.gs
-gas/FlyerReviewedNotify.gs
+gas/FlyerLifeCalendar.gs
 ```
 
 ---
@@ -264,23 +224,19 @@ gas/FlyerReviewedNotify.gs
 # トラブルシューティング
 
 チラシ画像0件:
-- `testSummitFlyerCatalogParse`のログを見る。
+- `testSummitLifeFlyerParse` のログを見る。
 - Shufoo/公式のHTML・画像配信形式変更を確認。
-
-月間判定できない:
-- 掲載期間を画像/HTMLから読み取れているか確認。
-- 月間チラシ自体が現在掲載中か確認。
 
 Notion同期失敗:
 - `NOTION_API_KEY`
 - `NOTION_FLYER_DATABASE_ID`
 - `NOTION_FLYER_LIST_DATABASE_ID`
-- Integrationが両DBへ接続されているか
+- Integrationが生活カレンダー/チラシ一覧の両DBへ接続されているか
 
 LINE通知0件:
 - チラシ一覧が `確認済み` か
-- 商品が `確認状態=確認済み / 有効=true` か
-- 今日が `特売日` の範囲内か
+- 生活カレンダーが `種類=特売 / 確認状態=確認済み / 有効=true` か
+- 今日が `日付` の範囲内か
 
 LINE送信失敗:
 - `LINE_USER_ID`
