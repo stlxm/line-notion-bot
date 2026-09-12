@@ -103,6 +103,7 @@ function createMonthlyBudgetNoticeFlex_() {
               type: "postback",
               label: "設定する",
               data: "action=start_monthly_budget_input",
+              displayText: "▶ 予算を設定する",
             },
           },
           {
@@ -113,6 +114,7 @@ function createMonthlyBudgetNoticeFlex_() {
               type: "postback",
               label: "後でする",
               data: "action=cancel_registration",
+              displayText: "▶ 後でする",
             },
           },
         ],
@@ -121,32 +123,24 @@ function createMonthlyBudgetNoticeFlex_() {
   };
 }
 
-// 毎月1日 朝6時台に実行する予算設定案内。
-// 「設定する」を押すとRender側の既存 postback 処理が
-// WAITING_MONTHLY_BUDGET 状態へ移行し、数字入力後に月別管理DBへ保存します。
 function sendMonthlyBudgetNotice() {
   Logger.log("--- 毎月1日予算設定アナウンス開始 ---");
   pushFinanceLineMessage_(createMonthlyBudgetNoticeFlex_());
   Logger.log("--- 毎月1日予算設定アナウンス終了 ---");
 }
 
-// 旧関数名との互換ラッパー。古いトリガーが残っていても動作します。
 function triggerMonthlyBudgetNotice() {
   sendMonthlyBudgetNotice();
 }
 
-// 手動テスト用。
 function testMonthlyBudgetNotice() {
   sendMonthlyBudgetNotice();
 }
 
-// 旧テスト関数名との互換ラッパー。
 function testMonthlyNotice() {
   testMonthlyBudgetNotice();
 }
 
-// 毎月1日6時台のトリガーを1つだけ作成します。
-// Apps Script のプロジェクトタイムゾーンは Asia/Tokyo を使用してください。
 function installMonthlyBudgetNoticeTrigger() {
   const handler = "sendMonthlyBudgetNotice";
 
@@ -165,22 +159,18 @@ function installMonthlyBudgetNoticeTrigger() {
   Logger.log("毎月1日6時台の予算設定通知トリガーを登録しました: " + handler);
 }
 
-// 1日1回。80%以上の予算があるときだけLINE通知します。
 function sendDailyBudgetAlert() {
   callFinanceEndpoint_("/api/budget-alert");
 }
 
-// 1日1回。カードのジャンル未選択が残っている時だけ件数を通知します。
 function sendDailyCardPendingReminder() {
   callFinanceEndpoint_("/api/card-pending-reminder");
 }
 
-// 1日1回。Render側で月末か判定し、月末だけ未処理0件/残件数をLINE通知します。
 function sendMonthEndCardCheck() {
   callFinanceEndpoint_("/api/card-month-end-check");
 }
 
-// 毎週日曜日など、週1回。
 function sendWeeklyFinanceReport() {
   callFinanceEndpoint_("/api/weekly-report");
 }
