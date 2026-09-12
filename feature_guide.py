@@ -35,6 +35,12 @@ FEATURES = [
         "usage": "「支出 1200 ラーメン」のように送信します。",
     },
     {
+        "name": "直前登録の修正・取り消し",
+        "status": "implemented",
+        "aliases": ["直前登録", "直前修正", "直前取り消し", "最後の支出修正", "家計簿修正"],
+        "usage": "「直前登録」で最後の家計簿を表示し、金額・店名・日付・ジャンル・支払方法を修正できます。「直前取り消し」で確認後にアーカイブできます。",
+    },
+    {
         "name": "カード未処理整理",
         "status": "implemented",
         "aliases": ["カード未処理", "カード整理", "カード分類"],
@@ -75,12 +81,6 @@ FEATURES = [
         "usage": "日次トリガーで確認済み特売をLINE通知します。手動確認はGASの testTodaySummitFlyerNotification。",
     },
     {
-        "name": "レシート入力",
-        "status": "planned",
-        "aliases": ["レシート", "レシート読取", "レシート読み取り"],
-        "usage": "Phase 3Aで実装予定です。現在はまだ利用できません。",
-    },
-    {
         "name": "自然文家計簿入力",
         "status": "planned",
         "aliases": ["自然文入力", "自然文家計簿", "普通の文章で家計簿"],
@@ -106,11 +106,10 @@ FEATURES = [
     },
 ]
 
-# FEATURESの単純な別名一致で拾えない場合にGeminiへ渡す、現在のBot能力の補助一覧。
-# Geminiはこの一覧の範囲から「既存機能で実現できるか」を推定する。
 CURRENT_CAPABILITIES = [
     "今月の家計簿ダッシュボード",
     "支出登録（支出 金額 店名）",
+    "直前登録の確認・金額/店名/日付/ジャンル/支払方法の修正・取り消し",
     "全体予算・ジャンル予算設定",
     "毎月1日の予算設定案内",
     "今日使える額",
@@ -250,7 +249,6 @@ def _save_request(query, original_text):
 
 
 def _gemini_feature_judgement(query):
-    """静的別名で見つからない機能を、現在の機能一覧からGeminiに推定させる。"""
     implemented = []
     planned = []
     for feature in FEATURES:
@@ -304,10 +302,9 @@ def handle_feature_question(text):
         return (
             "確認したい機能名も一緒に送ってください。\n"
             "例: 機能確認 貸し借り\n"
-            "例: 機能確認 レシート読み取り"
+            "例: 機能確認 家計簿を後から直す"
         )
 
-    # 1段階目: 従来どおり、明示した機能名・別名から高速判定。
     feature = _find_feature(query)
     if feature:
         if feature["status"] == "implemented":
@@ -317,16 +314,12 @@ def handle_feature_question(text):
             f"{feature['usage']}\n\n重複要望になるため、機能追加要望DBには新規登録しませんでした。"
         )
 
-    # 2段階目: 名前だけでは判断できないときだけGeminiに既存機能から推定させる。
     judgement = _gemini_feature_judgement(query)
     if judgement:
         if judgement["available"]:
             matched = judgement["matched_feature"] or "既存機能"
             usage = judgement["usage"] or judgement["reason"] or "既存機能で対応できます。"
-            return (
-                "✅ あります。既存機能から判断しました。\n"
-                f"【{matched}】\n{usage}"
-            )
+            return "✅ あります。既存機能から判断しました。\n" + f"【{matched}】\n{usage}"
         if judgement["planned"]:
             matched = judgement["matched_feature"] or query
             detail = judgement["usage"] or judgement["reason"] or "正式ロードマップに入っています。"
@@ -335,7 +328,6 @@ def handle_feature_question(text):
                 f"{detail}\n\n正式ロードマップ済みなので、機能追加要望DBには重複登録しませんでした。"
             )
 
-        # Geminiも「ない」と判断した場合だけ、ユーザーが書いた機能名をそのまま要望DBへ保存。
         saved, message = _save_request(query, text)
         if saved:
             return (
@@ -347,7 +339,6 @@ def handle_feature_question(text):
             f"⚠️ {message}\nSETUP.mdの NOTION_FEATURE_REQUEST_DATABASE_ID を確認してください。"
         )
 
-    # Gemini障害は「機能なし」と同一視しない。誤って要望登録しない。
     return (
         f"「{query}」は通常の機能一覧では見つかりませんでした。\n"
         "Geminiでの追加確認に失敗したため、今回は機能追加要望DBへ自動登録していません。\n"
