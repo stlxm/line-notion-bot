@@ -10,7 +10,6 @@ NOTION_MEMO_DATABASE_ID = os.environ.get("NOTION_MEMO_DATABASE_ID", "")
 
 
 def add_memo_to_notion(memo_text):
-    """NotionのメモDBへ新しいメモを追加します"""
     if not NOTION_MEMO_DATABASE_ID:
         return "メモDB IDが設定されていません。Renderの環境変数 NOTION_MEMO_DATABASE_ID を設定してください。"
 
@@ -42,7 +41,6 @@ def add_memo_to_notion(memo_text):
 
 
 def get_memos_from_notion():
-    """NotionのメモDBから現在残っているメモ一覧を取得します"""
     if not NOTION_MEMO_DATABASE_ID:
         return []
 
@@ -79,7 +77,6 @@ def get_memos_from_notion():
 
 
 def delete_memo_from_notion(page_id):
-    """指定したメモページをNotion上で削除（アーカイブ）します"""
     if not page_id:
         return False
 
@@ -99,7 +96,6 @@ def delete_memo_from_notion(page_id):
 
 
 def create_memo_delete_flex():
-    """削除候補を読みやすい縦一覧で表示し、選択時はまだ削除しません。"""
     memos = get_memos_from_notion()
     if not memos:
         return None
@@ -140,7 +136,8 @@ def create_memo_delete_flex():
             "contents": item_contents,
             "action": {
                 "type": "postback",
-                "data": f"action=prepare_delete_memo&id={m['id']}&title={quote(title[:200], safe='')}"
+                "data": f"action=prepare_delete_memo&id={m['id']}&title={quote(title[:200], safe='')}",
+                "displayText": f"▶ メモを選択: {preview[:40]}"
             }
         })
 
@@ -168,7 +165,8 @@ def create_memo_delete_flex():
                     "action": {
                         "type": "postback",
                         "label": "キャンセル",
-                        "data": "action=cancel_registration"
+                        "data": "action=cancel_registration",
+                        "displayText": "▶ キャンセル"
                     }
                 }
             ]
@@ -178,7 +176,6 @@ def create_memo_delete_flex():
 
 
 def create_memo_delete_confirm_flex(page_id, title):
-    """削除直前の確認Flex。ここで「削除する」を押した時だけ実削除します。"""
     safe_title = title or "無題"
     display_title = safe_title if len(safe_title) <= 300 else safe_title[:297] + "..."
 
@@ -235,7 +232,8 @@ def create_memo_delete_confirm_flex(page_id, title):
                     "action": {
                         "type": "postback",
                         "label": "削除する",
-                        "data": f"action=confirm_delete_memo&id={page_id}&title={quote(safe_title[:200], safe='')}"
+                        "data": f"action=confirm_delete_memo&id={page_id}&title={quote(safe_title[:200], safe='')}",
+                        "displayText": "▶ メモを削除する"
                     }
                 },
                 {
@@ -245,7 +243,8 @@ def create_memo_delete_confirm_flex(page_id, title):
                     "action": {
                         "type": "postback",
                         "label": "やめる",
-                        "data": "action=cancel_registration"
+                        "data": "action=cancel_registration",
+                        "displayText": "▶ やめる"
                     }
                 }
             ]
