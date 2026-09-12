@@ -50,6 +50,8 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 環境変数: `NOTION_MONTHLY_DATABASE_ID`
 
+毎月1日の予算設定案内で入力した金額は、このDBの当月 `全体予算` へ保存されます。
+
 ## 固定費DB
 
 `内容・店名` Title / `金額` Number / `ジャンル` Select / `カード・支払方法` Select / `有効` Checkbox
@@ -86,7 +88,7 @@ Database ID:
 684f959e451047389505a95ed368a7d6
 ```
 
-特売専用DBではなく、今後の日常予定をまとめる汎用カレンダーです。
+主項目:
 
 | 名前 | 型 | 用途 |
 |---|---|---|
@@ -98,24 +100,7 @@ Database ID:
 | `有効` | Checkbox | カレンダー表示対象 |
 | `更新日時` | Date | 最終同期 |
 
-チラシ由来の特売では追加で以下を使います。
-
-```text
-価格
-容量・単位
-店舗
-備考
-優先度
-チラシURL
-チラシ識別
-識別キー
-元チラシID
-元チラシ名
-元画像URL
-確認状態
-```
-
-LINE通知側も現在の生活カレンダーのプロパティ名 `予定名` / `日付` を読みます。旧名の `商品名` / `特売日` は使いません。
+チラシ由来では `価格 / 容量・単位 / 店舗 / 備考 / 優先度 / チラシURL / チラシ識別 / 識別キー / 元チラシID / 元チラシ名 / 元画像URL / 確認状態` も使います。
 
 ## チラシ一覧
 
@@ -124,21 +109,6 @@ Database ID:
 ```text
 fdd0c0ce50974273b9b88f5272858e90
 ```
-
-| 名前 | 型 |
-|---|---|
-| `チラシ名` | Title |
-| `配信ID` | Rich text |
-| `種別` | Select (`月間/週次/日替わり/その他`) |
-| `掲載期間` | Date |
-| `元URL` | URL |
-| `画像URL` | URL |
-| `画像一覧` | Rich text |
-| `抽出件数` | Number |
-| `抽出サマリー` | Rich text |
-| `確認状態` | Select (`確認待ち/確認済み/要修正`) |
-| `チラシ識別` | Rich text |
-| `取得日時` | Date |
 
 Notion Integrationを生活カレンダーとチラシ一覧の両方へ接続してください。
 
@@ -170,49 +140,20 @@ CARD_AUTO_REGISTER_MIN_MATCHES
 
 ---
 
-# 5. Gemini AIモデル
+# 5. GAS Script Properties
 
-```text
-AI Lite   → gemini-3.5-flash-lite
-AI Flash  → gemini-3.6-flash
-AI Model  → 現在モデル確認
-AI 質問   → 選択中モデルで回答
-```
-
-LINE AIの既定はLiteです。チラシ画像解析も `FLYER_GEMINI_MODEL` 未設定なら `gemini-3.5-flash-lite` を使います。
-
----
-
-# 6. サミットチラシ → 生活カレンダー
-
-状態: **実装完了・実機確認済み・日次運用中**
-
-対象:
-
-```text
-公式店舗ページ:
-https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
-
-Shufoo店舗ID:
-264241
-```
-
-Apps Scriptへコピーする完成版ファイル:
-
-```text
-gas/FlyerDeals.gs
-gas/FlyerLifeCalendar.gs
-```
-
-役割:
-- `FlyerDeals.gs`: Web/画像/Notion/LINE共通関数、今日の特売取得、重複整理、短期特売優先通知
-- `FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信IDごとの個別画像解析、再試行、種別判定、確認待ち登録、生活カレンダー同期、確認済み通知
-
-## GAS Script Properties
+共通:
 
 ```text
 LINE_USER_ID
 LINE_CHANNEL_ACCESS_TOKEN
+RENDER_BASE_URL
+SCHEDULER_SECRET
+```
+
+チラシ用:
+
+```text
 GEMINI_API_KEY
 NOTION_API_KEY
 NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
@@ -229,6 +170,97 @@ Apps Scriptタイムゾーン:
 
 ```text
 (GMT+09:00) Tokyo
+```
+
+**LINEのUser IDやChannel Access Tokenは `.gs` ファイルへ直書きしません。必ずScript Propertiesへ保存します。**
+
+---
+
+# 6. 毎月1日の予算設定案内
+
+実装ファイル:
+
+```text
+gas/FinanceReports.gs
+```
+
+必要なScript Properties:
+
+```text
+LINE_USER_ID
+LINE_CHANNEL_ACCESS_TOKEN
+```
+
+手動テスト:
+
+```text
+testMonthlyBudgetNotice
+```
+
+正常ならLINEへ「今月の全体予算を設定しますか？」のFlexが届きます。
+
+`設定する` を押すとRender側の既存処理が `WAITING_MONTHLY_BUDGET` 状態へ移り、数字だけを送ると当月の `全体予算` がNotion月別管理DBへ保存されます。
+
+トリガー作成:
+
+```text
+installMonthlyBudgetNoticeTrigger
+```
+
+これにより `sendMonthlyBudgetNotice` が毎月1日6時台に実行されます。
+
+Apps Scriptのトリガー画面で次を確認してください。
+
+```text
+関数: sendMonthlyBudgetNotice
+イベント: 時間主導型
+月: 毎月
+日: 1日
+時間: 午前6時〜7時
+```
+
+旧関数名:
+
+```text
+triggerMonthlyBudgetNotice
+testMonthlyNotice
+```
+
+も互換ラッパーとして残しています。
+
+---
+
+# 7. Gemini AIモデル
+
+```text
+AI Lite   → gemini-3.5-flash-lite
+AI Flash  → gemini-3.6-flash
+AI Model  → 現在モデル確認
+AI 質問   → 選択中モデルで回答
+```
+
+LINE AIの既定はLiteです。
+
+---
+
+# 8. サミットチラシ → 生活カレンダー
+
+状態: **実装完了・実機確認済み・日次運用中**
+
+対象:
+
+```text
+公式店舗ページ:
+https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
+Shufoo店舗ID:
+264241
+```
+
+Apps Scriptへコピーする完成版ファイル:
+
+```text
+gas/FlyerDeals.gs
+gas/FlyerLifeCalendar.gs
 ```
 
 実機成功結果:
@@ -248,28 +280,14 @@ LINE通知:
 8日以上  → 📅 月間・長期特売
 ```
 
-2026-09-12、`installDailySummitLifeCalendarTrigger` 実行後に Apps Script のトリガー画面で `runDailySummitLifeCalendarAutomation` が登録されていることを実機確認済みです。
-
 ---
 
-# 7. チラシのテスト・保守
-
-```text
-testSummitShufooDeliveryIds          配信IDだけ確認（Geminiなし）
-testSummitLifeFlyerSync              同期テスト
-testTodaySummitFlyerNotification     通知だけ確認
-applyLifeFlyerReviewsNow              レビュー反映
-```
-
-詳細は `FLYER_TEST.md`。
-
----
-
-# 8. GASトリガー
+# 9. GASトリガー
 
 | 関数 | 推奨 |
 |---|---|
 | `checkCardEmails` | 1時間ごと |
+| `sendMonthlyBudgetNotice` | 毎月1日6時台 |
 | `runDailySummitLifeCalendarAutomation` | 毎日6時台 |
 | `sendDailyMemoReminder` | 毎日朝8時 |
 | `sendDailyCardPendingReminder` | 毎日20〜21時 |
@@ -279,11 +297,11 @@ applyLifeFlyerReviewsNow              レビュー反映
 
 ---
 
-# 9. 今後の開発ロードマップと設定変更
+# 10. 開発ロードマップ
 
-今後の機能開発は、以前の100機能案から選択した48機能を基準にします。正式な番号・機能名・進捗は `DEVELOPMENT.md` を正本とします。
+現在はPhase 3より先に **Phase 2.8 毎月1日の予算設定案内** を実機確認します。
 
-次は **Phase 3A — 入力強化** を実装します。
+確認完了後にPhase 3Aへ進みます。
 
 ```text
 #32 レシート入力
@@ -292,29 +310,10 @@ applyLifeFlyerReviewsNow              レビュー反映
 #36 よく使う支出テンプレート
 ```
 
-Phase 3Aの実装開始時に、新しいNotionプロパティ・DB・Render環境変数・LINE設定が必要になった場合は、その時点でこのSETUP.mdへ追加します。現時点ではPhase 3A用の追加設定はまだ確定していないため、先に不要な設定を作りません。
-
-レシート入力ではLINE画像メッセージの取得方式を確認してから実装します。自然文入力は、金額・日付・支払方法などをまずルールベースで解析し、曖昧な場合だけ確認する方針です。
-
----
-
-# 10. トラブル時
-
-通知が0件:
-- チラシ一覧が `確認済み` か
-- 生活カレンダーで対象行が `種類=特売 / 確認状態=確認済み / 有効=true` か
-- 当日が `日付` の範囲内か
-
-短期特売が通知されない:
-- `testTodaySummitFlyerNotification` を実行
-- `[Notion今日分] ... 元=N件 / 重複整理後=M件` を確認
-
-解析失敗:
-- Lite無料枠を使うため同じ同期テストを連続実行しない
-- detected と analyzed が一致しない場合は部分同期せず停止するのが正常
-
 ---
 
 # 11. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
+
+Channel Access Tokenをチャットやコードへ貼り付けた場合は、そのトークンを再発行し、RenderとGAS Script Propertiesの両方を新しい値へ更新してください。
