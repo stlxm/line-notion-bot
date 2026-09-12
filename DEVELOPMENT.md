@@ -135,7 +135,7 @@ GAS Script Property名は互換性のため `NOTION_FLYER_DATABASE_ID` を継続
 
 # Phase 2.7 — 月間チラシ一覧・画像確認・生活カレンダー連携
 
-状態: **実装完了・要実機確認**
+状態: **実装済み・再試行安全化後の実機確認待ち**
 
 対象:
 
@@ -146,20 +146,21 @@ Shufoo店舗ID: 264241
 
 最終実装ファイル:
 - `gas/FlyerDeals.gs`: HTML/iframe/画像取得、Notion/LINE共通関数。
-- `gas/FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信ID単位の個別解析、確認待ち、生活カレンダー同期、確認済み通知、日次トリガー。
+- `gas/FlyerLifeCalendar.gs`: Shufoo配信ID列挙、配信ID単位の個別解析、厳密再試行、全件成功確認、確認待ち、生活カレンダー同期、確認済み通知、日次トリガー。
 - `FLYER_TEST.md`: 実機確認手順。
 
-## 2026-09-12 重要修正 — 配信IDの検出をリンク+画像URLへ拡張
+## 2026-09-12 重要修正1 — 配信IDの検出をリンク+画像URLへ拡張
 
 実機テストでは、一覧ページのURLとしては1件しか検出できなかったが、同じページ内の画像URLには複数の配信IDが存在した。
 
-確認できた画像URL由来ID例:
+確認できたID:
 
 ```text
-2187006858976
+3342326844037
 9783726841844
 3487936841840
 4441736841834
+2187006858976
 ```
 
 Shufoo画像URL形式:
@@ -176,48 +177,70 @@ Shufoo画像URL形式:
    全要素が [object Object] 扱いになり最初の1件だけ残っていた
 ```
 
-修正後:
+修正後はリンクURLと画像URLの両方から配信IDを抽出し、ID単位で重複除去して個別解析する。
+
+## 2026-09-12 重要修正2 — Gemini解析の揺れで2件落ちる問題
+
+実機で5件検出できたにもかかわらず、`testSummitLifeFlyerSync` の結果が以下になった。
 
 ```text
-Shufoo一覧/公式/iframe
-↓
-個別リンクから配信ID抽出
-+
-画像URLから配信ID抽出
-↓
-ID文字列をキーに重複除去
-↓
-配信IDごとに個別ページ取得
-↓
-画像URLの配信IDが一致する画像だけを優先
-↓
-配信IDごとにGemini個別解析
+detected=5
+flyers=3
 ```
 
-チラシ名は表示用であり、同一性判定には使わない。
-
-Geminiを使わない軽量検出テストを追加:
+診断で失敗IDを特定:
 
 ```text
-testSummitShufooDeliveryIds
+4441736841834
+2187006858976
 ```
 
-Notion:
+Recovery版では両IDが解析NGになったが、同じ画像を `temperature=0` の厳密診断プロンプトで再解析すると以下を正常に取得できた。
 
 ```text
-チラシ一覧
-+ 配信ID Rich text
+4441736841834
+9月割引セール・ポイント倍率アップセールカレンダー
+2026-09-01〜2026-09-30
+6件
 
-生活カレンダー
-+ 元チラシID Rich text
+2187006858976
+9月12日(土)〜9月14日(月)
+2026-09-12〜2026-09-14
+16件
 ```
+
+したがって画像取得の欠落ではなく、Liteモデルの1回目JSON出力の揺れが原因と判断。
+
+最終修正:
+
+```text
+通常解析
+↓
+日付なし / 商品0件なら不完全扱い
+↓
+その配信IDだけ厳密プロンプト + temperature=0 で1回再試行
+↓
+トップレベル期間が欠けた場合は、明示的に読めた商品日付の最小〜最大で救済
+↓
+全配信IDが解析成功したことを確認
+↓
+全件成功時のみNotionへ同期
+```
+
+安全上、5件検出して3件だけ成功した場合は3件だけをNotionへ書かない。`missing=<ID>` を出して同期前に停止する。
+
+3日間のチラシは `週次` として扱う。
 
 ## 安全仕様
 
 ```text
 新しい配信IDを検出
 ↓
-その配信IDだけ画像解析
+配信IDごとに画像解析
+↓
+必要時のみ失敗IDを再解析
+↓
+全ID成功を確認
 ↓
 チラシ一覧 = 確認待ち
 生活カレンダー = 種類=特売 / 確認待ち / 有効=false
@@ -233,13 +256,6 @@ applyLifeFlyerReviewsNow または次回日次処理
 ↓
 今日 + 確認済み + 有効=true の特売だけLINE通知
 ```
-
-月間判定:
-- 20日以上: `月間`
-- 4〜19日: `週次`
-- 1〜2日: `日替わり`
-- 3日: `その他`
-- 画像/HTMLから期間が読めない場合は登録しない。
 
 最終日次入口:
 
@@ -282,22 +298,23 @@ Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 現在の再開位置:
 
 ```text
-1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で上書き
-2. FlyerDeals.gs はそのまま最新版を使用
-3. testSummitShufooDeliveryIds を実行（Gemini消費なし）
-4. 候補配信ID / 検出した配信ID を確認
-5. 9783726841844 / 4441736841834 / 3487936841840 等が別IDとして出ることを確認
-6. IDが揃ったら testSummitLifeFlyerParse
-7. 各IDの imageUrls / 掲載期間 / 商品を確認
-8. testSummitLifeFlyerSync
-9. Notion「チラシ一覧 > 確認待ち」で配信IDごとに別行になっていることを確認
-10. 正しい配信IDを確認済みに変更
-11. applyLifeFlyerReviewsNow
-12. 生活カレンダーで 元チラシID / 確認済み / 有効=true を確認
-13. testTodayLifeCalendarFlyerNotification
-14. installDailySummitLifeCalendarTrigger
-15. 問題なければPhase 2.7を完了扱いへ変更
-16. ユーザー指示があった場合だけPhase 3開始
+1. Apps Scriptの FlyerLifeCalendar.gs をGitHub最新版で丸ごと上書き
+2. 診断用 FlyerRecovery.gs / FlyerParseDebug.gs が残っていれば削除
+3. FlyerDeals.gs はそのまま最新版を使用
+4. testSummitLifeFlyerSync を実行
+5. 候補配信IDが5件出ることを確認
+6. 1回目が不完全なIDで [解析再試行] が出てもよい
+7. 最終的に detected=5 / analyzed=5 / missing=[] を確認
+8. [同期OK] が5配信IDすべてに出ることを確認
+9. 特に 2187006858976 が 2026-09-12〜2026-09-14 として同期されることを確認
+10. Notion「チラシ一覧 > 確認待ち」で5IDが別行になっていることを確認
+11. 正しい配信IDを確認済みに変更
+12. applyLifeFlyerReviewsNow
+13. 生活カレンダーで 元チラシID / 確認済み / 有効=true を確認
+14. testTodayLifeCalendarFlyerNotification
+15. installDailySummitLifeCalendarTrigger
+16. 問題なければPhase 2.7を完了扱いへ変更
+17. ユーザー指示があった場合だけPhase 3開始
 ```
 
 ---
@@ -318,4 +335,9 @@ Phase 2.7の実機確認が終わるまでPhase 3へ進めない。
 - オブジェクト配列を `uniqueStrings_` に渡して1件に潰していたバグを修正。
 - `testSummitShufooDeliveryIds` を追加。
 - `チラシ一覧.配信ID` / `生活カレンダー.元チラシID` を追加。
+- 実機で5件検出→3件解析の欠落を確認。
+- 4441736841834 / 2187006858976 は厳密プロンプトなら正常に読めることを確認。
+- 通常解析失敗時の1回限定厳密再試行を `FlyerLifeCalendar.gs` に統合。
+- 全配信ID成功前のNotion部分同期を禁止。
+- 3日間チラシを週次として扱うよう修正。
 - README / SETUP / DEVELOPMENT を更新。
