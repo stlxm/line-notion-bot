@@ -39,21 +39,14 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 ## 月別管理DB
 
-既存項目:
-
 | 名前 | 型 |
 |---|---|
 | `年月` | Title |
 | `全体予算` | Number |
 | `食費予算`など | Number |
-
-Phase 2Bで追加:
-
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `締め済み` | Checkbox | 月締め済みか |
-| `締め日時` | Date | 月締め確定日時 |
-| `確定支出` | Number | 月締め時の支出合計 |
+| `締め済み` | Checkbox |
+| `締め日時` | Date |
+| `確定支出` | Number |
 
 環境変数: `NOTION_MONTHLY_DATABASE_ID`
 
@@ -121,14 +114,14 @@ Phase 2Bで追加:
 | `容量・単位` | Rich text | 1パック、100gなど |
 | `店舗` | Select | サミット ミナノ分倍河原店 |
 | `備考` | Rich text | 税込/税抜・条件等 |
-| `チラシURL` | URL | 取得元 |
 | `優先度` | Number | 1〜3 |
+| `チラシURL` | URL | 取得元 |
+| `チラシ識別` | Rich text | チラシ更新判定用 |
 | `識別キー` | Rich text | 重複防止用 |
+| `有効` | Checkbox | 現在のチラシで有効か |
 | `更新日時` | Date | 最終同期日時 |
 
-`特売日`を使ったカレンダービューを作成してください。
-
-期限切れページは毎朝自動で`archived=true`へ変更されます。Notion APIではこれが通常の削除相当で、DB/カレンダービューから非表示になります。
+`特売日`を使ったカレンダービューを作成してください。おすすめのビュー条件は `有効 = true` です。
 
 ---
 
@@ -228,14 +221,13 @@ AI 質問   → 選択中モデルで回答
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
-Apps Scriptへ次の2ファイルを入れます。
+Apps Scriptへ入れるファイルは1つです。
 
 ```text
 gas/FlyerDeals.gs
-gas/FlyerNotion.gs
 ```
 
-`FlyerDeals.gs`は取得・Gemini解析、`FlyerNotion.gs`はNotion同期・期限切れ整理・日次実行を担当します。
+この1ファイルが取得・Gemini画像解析・Notion同期・LINE通知を担当します。
 
 ## チラシ用 Script Properties
 
@@ -257,9 +249,7 @@ FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 
 Notion Integrationを特売カレンダーDBへ接続してください。
 
-## タイムゾーン
-
-Apps Scriptは次に設定します。
+## Apps Scriptタイムゾーン
 
 ```text
 (GMT+09:00) Tokyo
@@ -273,16 +263,16 @@ Apps Scriptは次に設定します。
 testSummitFlyerParse
 ```
 
-Notion同期だけ:
+Notion同期 + LINE:
 
 ```text
-testSummitFlyerNotionSyncOnly
+testSummitFlyerAutomation
 ```
 
-Notion + LINE:
+Notion登録済みデータからLINEだけ:
 
 ```text
-testSummitFlyerNotionAutomation
+testTodaySummitFlyerNotification
 ```
 
 ## 毎日自動実行
@@ -290,30 +280,24 @@ testSummitFlyerNotionAutomation
 一度だけ:
 
 ```text
-installDailySummitFlyerNotionTrigger
+installDailySummitFlyerTrigger
 ```
-
-旧Googleカレンダー版のトリガーが残っていれば、この関数が自動で削除します。
 
 以降は毎日6時台に:
 
 ```text
-期限切れをアーカイブ
+最新チラシ確認
 ↓
-最新チラシ取得/解析
+新しいチラシだけGemini画像解析
 ↓
 Notionへ同期
 ↓
-今日の特売をLINE通知
+Notionから今日分を再取得
+↓
+LINE通知
 ```
 
-の順で実行します。
-
-期限切れだけ手動整理したい場合:
-
-```text
-cleanupExpiredSummitFlyerPages
-```
+同じチラシならGemini解析結果を再利用します。
 
 詳細は`FLYER_TEST.md`。
 
@@ -328,7 +312,6 @@ gas/Code.gs
 gas/FinanceReports.gs
 gas/DailyMemo.gs
 gas/FlyerDeals.gs
-gas/FlyerNotion.gs
 ```
 
 既存カード/定期通知用:
@@ -357,7 +340,7 @@ GitHubの`.gs`は通常Apps Scriptへ自動同期されません。
 | 関数 | 推奨 |
 |---|---|
 | `checkCardEmails` | 1時間ごと |
-| `runDailySummitFlyerNotionAutomation` | 毎日6〜7時台 |
+| `runDailySummitFlyerAutomation` | 毎日6時台 |
 | `sendDailyMemoReminder` | 毎日朝8時 |
 | `sendDailyCardPendingReminder` | 毎日20〜21時 |
 | `sendMonthEndCardCheck` | 毎日21時 |
