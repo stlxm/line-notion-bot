@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
+import card_queue
 import finance_phase2
 
 JST = timezone(timedelta(hours=9), "JST")
@@ -26,6 +27,15 @@ def _valid_date(value):
         return True
     except ValueError:
         return False
+
+
+def _is_past_month(month_str):
+    try:
+        target = datetime.strptime(month_str, "%Y-%m").date().replace(day=1)
+    except ValueError:
+        return False
+    now = datetime.now(JST).date().replace(day=1)
+    return target < now
 
 
 def _update_goal_current(name, current):
@@ -56,9 +66,30 @@ def _update_goal_current(name, current):
     return f"✅ 貯金目標「{name}」の現在額を ¥{int(current):,} に更新しました。"
 
 
+def build_phase2_help():
+    return (
+        "【家計判断 / Phase 2】\n"
+        "2A 日々の判断\n"
+        "・今日使える\n"
+        "・ペース\n"
+        "・異常支出\n\n"
+        "2B 月次判断\n"
+        "・予算提案\n"
+        "・月締め\n"
+        "・月次レビュー\n\n"
+        "2C 将来予測・目標\n"
+        "・年間予測\n"
+        "・貯金目標\n\n"
+        "詳しい形式は「ヘルプ」またはPHASE2_TEST.mdを確認してください。"
+    )
+
+
 def handle_text_command(text):
     """Phase 2の同期コマンドを処理。該当しない場合はNoneを返す。"""
     message = (text or "").strip()
+
+    if message in ["家計判断", "Phase2", "phase2", "フェーズ2"]:
+        return build_phase2_help()
 
     if message in ["今日使える", "1日予算", "今日の予算"]:
         return finance_phase2.build_daily_allowance_text()
@@ -91,12 +122,33 @@ def handle_text_command(text):
         parts = message.replace("　", " ").split()
         if len(parts) != 2 or not _valid_month(parts[1]):
             return "月締めは「月締め 2026-08」の形式で送ってください。引数なしなら前月を表示します。"
+        if not _is_past_month(parts[1]):
+            return "月締めは終了済みの月だけ実行できます。今月や未来月は締められません。"
         return finance_phase2.build_month_close_preview(parts[1])
+
+    if message.startswith("月締め確定強制 ") or message.startswith("月締め確定強制　"):
+        parts = message.replace("　", " ").split()
+        if len(parts) != 2 or not _valid_month(parts[1]):
+            return "月締め確定強制は「月締め確定強制 2026-08」の形式で送ってください。"
+        if not _is_past_month(parts[1]):
+            return "月締めは終了済みの月だけ実行できます。今月や未来月は締められません。"
+        success, result, _ = finance_phase2.close_month(parts[1])
+        return ("✅ " if success else "⚠️ ") + result
 
     if message.startswith("月締め確定 ") or message.startswith("月締め確定　"):
         parts = message.replace("　", " ").split()
         if len(parts) != 2 or not _valid_month(parts[1]):
             return "月締め確定は「月締め確定 2026-08」の形式で送ってください。"
+        if not _is_past_month(parts[1]):
+            return "月締めは終了済みの月だけ実行できます。今月や未来月は締められません。"
+        pending_count = card_queue.get_pending_count()
+        if pending_count > 0:
+            return (
+                f"⚠️ カード未処理が {pending_count} 件あるため月締めを停止しました。\n"
+                "先に「カード未処理」で処理してください。\n"
+                "内容を確認済みで意図的に締める場合だけ、"
+                f"「月締め確定強制 {parts[1]}」と送ってください。"
+            )
         success, result, _ = finance_phase2.close_month(parts[1])
         return ("✅ " if success else "⚠️ ") + result
 
