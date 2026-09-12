@@ -9,7 +9,7 @@
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
-この機能は `gas/FlyerDeals.gs` の取得/解析機能と `gas/FlyerNotion.gs` のNotion同期機能を組み合わせて動きます。GitHubへコミットしただけではApps Scriptへ自動反映されないため、両方をGASプロジェクトへコピーしてください。
+この機能は `gas/FlyerDeals.gs` 1ファイルで動きます。GitHubへコミットしただけではApps Scriptへ自動反映されないため、最新版をGASプロジェクトへコピーしてください。
 
 ---
 
@@ -25,9 +25,11 @@ https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 | `容量・単位` | Rich text |
 | `店舗` | Select |
 | `備考` | Rich text |
-| `チラシURL` | URL |
 | `優先度` | Number |
+| `チラシURL` | URL |
+| `チラシ識別` | Rich text |
 | `識別キー` | Rich text |
+| `有効` | Checkbox |
 | `更新日時` | Date |
 
 `特売日`を使ったカレンダービューを追加してください。
@@ -79,38 +81,35 @@ FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 testSummitFlyerParse
 ```
 
-実行ログの`deals`配列に商品名・価格・対象日が入れば解析成功です。
+実行ログの `deals` 配列に商品名・価格・対象日が入れば解析成功です。この段階ではNotionもLINEも変更しません。
 
 ---
 
-# 5. Notion同期だけテスト
+# 5. Notion + LINEまでテスト
 
 ```text
-testSummitFlyerNotionSyncOnly
+testSummitFlyerAutomation
 ```
 
 期待結果:
 
-1. 期限切れの特売ページがアーカイブされる
-2. 今日以降の特売がNotion DBへ登録される
-3. 同じ商品・価格・期間を再実行しても重複ページが増えず、既存ページが更新される
-4. `特売日`のカレンダービューに商品が表示される
-
-Notion APIでは完全削除ではなく`archived=true`としてアーカイブします。通常のDB・カレンダービューからは消えます。
+1. 最新チラシがNotion DBへ登録される
+2. 同じ商品・価格・期間を再実行しても重複ページが増えず、既存ページが更新される
+3. `特売日`のカレンダービューに商品が表示される
+4. LINEへ当日の特売一覧が届く
+5. 通知内容はNotionを読み直した結果と一致する
 
 ---
 
-# 6. Notion + LINEまでテスト
+# 6. LINE通知だけテスト
+
+Notion登録済みデータから通知だけ確認する場合:
 
 ```text
-testSummitFlyerNotionAutomation
+testTodaySummitFlyerNotification
 ```
 
-期待結果:
-
-1. 期限切れページが整理される
-2. 最新チラシがNotionへ同期される
-3. LINEへ当日の特売一覧が届く
+Gemini画像解析は行いません。
 
 ---
 
@@ -119,38 +118,38 @@ testSummitFlyerNotionAutomation
 一度だけ:
 
 ```text
-installDailySummitFlyerNotionTrigger
+installDailySummitFlyerTrigger
 ```
 
 を実行します。
 
-この関数は旧Googleカレンダー版の`runDailySummitFlyerAutomation`トリガーが存在すれば削除し、`runDailySummitFlyerNotionAutomation`を毎日6時台に実行するトリガーだけを作成します。
+以降は毎日6時台に `runDailySummitFlyerAutomation` が実行されます。
 
 処理順:
 
 ```text
-期限切れNotionページをアーカイブ
-↓
 サミット公式店舗ページを取得
 ↓
-必要な場合だけ同店舗トクバイへフォールバック
+iframe / 公開フォールバックからチラシ候補を取得
 ↓
-Geminiで商品名・価格・対象日を抽出
+新しいチラシならGeminiで商品名・価格・対象日を抽出
 ↓
 Notion特売カレンダーDBへ同期
 ↓
-今日の特売をLINE通知
+Notionから今日の特売を再取得
+↓
+LINE通知
 ```
 
 ---
 
-# 8. 期限切れだけ手動整理
+# 8. 重複・旧チラシ
 
-```text
-cleanupExpiredSummitFlyerPages
-```
+`店舗 + 商品 + 価格 + 容量 + 特売期間`から`識別キー`を作るため、同一特売の重複登録を防ぎます。
 
-`特売日`の終了日が今日より前ならアーカイブします。終了日がない単日特売は開始日を終了日として扱います。
+新しいチラシへ切り替わった場合、今日以降に残っている旧チラシ行は `有効=false` にします。過去データは履歴として残します。
+
+Notionの通常ビューでは `有効 = true` のフィルターを追加すると、現在有効な特売だけ表示できます。
 
 ---
 
@@ -163,7 +162,7 @@ cleanupExpiredSummitFlyerPages
 https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 ```
 
-公式ページからチラシ画像を十分取得できない場合だけ、同店舗のトクバイページをフォールバックに使います。
+公式ページからチラシ画像を十分取得できない場合は、同店舗の公開チラシページをフォールバックとして使います。
 
 高頻度取得はせず、日次実行を前提にしています。
 
@@ -171,7 +170,12 @@ https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
 
 # 10. Gemini利用量
 
-チラシページ・画像URL等から署名を作り、前回と同一なら保存済み解析結果を再利用します。同じチラシが続く間に毎日同じ画像をGeminiへ送り直さない設計です。
+チラシページ・画像URL等から署名を作り、前回と同一なら保存済み解析結果を再利用します。
+
+```text
+同じチラシ → Gemini画像解析なし
+新しいチラシ → Gemini画像解析
+```
 
 ---
 
@@ -199,7 +203,7 @@ LINE_CHANNEL_ACCESS_TOKEN
 
 ## チラシが0件
 
-`testSummitFlyerParse`のログを確認し、サイト側のHTML/画像配信形式変更を確認します。
+`testSummitFlyerParse`の実行ログを確認し、サイト側のHTML/画像配信形式変更を確認します。
 
 ---
 
@@ -208,9 +212,10 @@ LINE_CHANNEL_ACCESS_TOKEN
 ```text
 [ ] testSummitFlyerParse で deals が取得できる
 [ ] 商品名・価格・対象日がおおむねチラシと一致する
-[ ] testSummitFlyerNotionSyncOnly でNotionへ登録される
+[ ] testSummitFlyerAutomation でNotionへ登録される
 [ ] 同じ内容を2回実行しても重複ページが増えない
-[ ] 期限切れページがDB/カレンダービューから消える
-[ ] testSummitFlyerNotionAutomation でLINEへ当日特売が届く
-[ ] installDailySummitFlyerNotionTrigger を実行済み
+[ ] 新チラシ切替時に旧未来データが有効=falseになる
+[ ] Notionカレンダービューに特売が表示される
+[ ] testTodaySummitFlyerNotification でLINEへ当日特売が届く
+[ ] installDailySummitFlyerTrigger を実行済み
 ```
