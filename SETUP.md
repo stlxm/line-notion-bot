@@ -9,6 +9,7 @@
 - `UI_DESIGN.md`: LINE UI・Postback設計
 - `PHASE1_TEST.md`: Phase 1実機テスト
 - `PHASE2_TEST.md`: Phase 2実機テスト
+- `PHASE3_TEST.md`: Phase 3B修正・取り消しテスト
 - `FLYER_TEST.md`: サミットチラシ・生活カレンダー実機テスト
 - `gas/README.md`: GAS詳細
 
@@ -35,7 +36,13 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 | `カード・支払方法` | Select |
 | `月別管理` | Relation |
 
-環境変数: `NOTION_KAKEIBO_DATABASE_ID`
+環境変数:
+
+```text
+NOTION_KAKEIBO_DATABASE_ID
+```
+
+Phase 3BはこのDBの最新作成1件を対象にします。新しいプロパティは不要です。
 
 ## 月別管理DB
 
@@ -49,8 +56,6 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 | `確定支出` | Number |
 
 環境変数: `NOTION_MONTHLY_DATABASE_ID`
-
-毎月1日の予算設定案内で入力した金額は、このDBの当月 `全体予算` へ保存されます。
 
 ## 固定費DB
 
@@ -100,8 +105,6 @@ f9b2c4eb59ea4c13b968f8d9b48663bc
 NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
 ```
 
-このDBは家計簿とは別管理です。貸し借り記録を自動で支出・収入扱いにしません。
-
 ## 機能追加要望DB
 
 Database ID:
@@ -124,8 +127,6 @@ Database ID:
 ```text
 NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
 ```
-
-LINEで未実装の未知機能を聞いたときに自動登録します。同名要望がある場合は新規行を増やさず `回数` を増やします。
 
 ---
 
@@ -151,8 +152,6 @@ Database ID:
 | `有効` | Checkbox | カレンダー表示対象 |
 | `更新日時` | Date | 最終同期 |
 
-チラシ由来では `価格 / 容量・単位 / 店舗 / 備考 / 優先度 / チラシURL / チラシ識別 / 識別キー / 元チラシID / 元チラシ名 / 元画像URL / 確認状態` も使います。
-
 ## チラシ一覧
 
 Database ID:
@@ -160,8 +159,6 @@ Database ID:
 ```text
 fdd0c0ce50974273b9b88f5272858e90
 ```
-
-Notion Integrationを生活カレンダーとチラシ一覧の両方へ接続してください。
 
 ---
 
@@ -191,14 +188,14 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
-今回追加する値:
+貸し借り・要望DB:
 
 ```text
 NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
 NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
 ```
 
-設定後、Renderを再デプロイしてください。GitHubに機能ナビ修正を入れたあとも、LINEで新しい自然文判定やGemini補助判定を使うには最新版のRenderデプロイが必要です。
+GitHub更新後はRenderを最新版へ再デプロイしてください。
 
 ---
 
@@ -234,7 +231,7 @@ Apps Scriptタイムゾーン:
 (GMT+09:00) Tokyo
 ```
 
-**LINEのUser IDやChannel Access Tokenは `.gs` ファイルへ直書きしません。必ずScript Propertiesへ保存します。**
+秘密値は `.gs` ファイルへ直書きせずScript Propertiesへ保存します。
 
 ---
 
@@ -246,22 +243,11 @@ Apps Scriptタイムゾーン:
 gas/FinanceReports.gs
 ```
 
-必要なScript Properties:
-
-```text
-LINE_USER_ID
-LINE_CHANNEL_ACCESS_TOKEN
-```
-
 手動テスト:
 
 ```text
 testMonthlyBudgetNotice
 ```
-
-正常ならLINEへ「今月の全体予算を設定しますか？」のFlexが届きます。
-
-`設定する` を押すとRender側の既存処理が `WAITING_MONTHLY_BUDGET` 状態へ移り、数字だけを送ると当月の `全体予算` がNotion月別管理DBへ保存されます。
 
 トリガー作成:
 
@@ -269,13 +255,11 @@ testMonthlyBudgetNotice
 installMonthlyBudgetNoticeTrigger
 ```
 
-これにより `sendMonthlyBudgetNotice` が毎月1日6時台に実行されます。
+`設定する` / `後でする` のPostbackには `displayText` があり、タップ直後にトークへ選択内容が表示されます。
 
 ---
 
 # 7. 貸し借り管理
-
-Render再デプロイ後、LINEで:
 
 ```text
 貸した 田中 3000 ランチ代
@@ -284,74 +268,93 @@ Render再デプロイ後、LINEで:
 精算 田中 3000
 ```
 
-を使えます。
-
-`精算 相手 金額` は、未精算レコードが1件だけ一致したときだけ `状態=精算済み` と `精算日` を更新します。同じ相手・同じ金額が複数ある場合は安全のため自動更新しません。
+`精算 相手 金額` は未精算レコードが1件だけ一致した場合のみ更新します。
 
 ---
 
 # 8. 機能確認・Gemini補助判定・機能追加要望
 
-Render再デプロイ後、LINEで:
-
 ```text
 機能確認 貸し借り
-機能確認 レシート入力
 機能確認 旅行のためにお金を貯める
 貸し借りの記録ってできる？
 ```
 
-のように質問できます。
-
-判定順:
-- `feature_guide.py` の登録済み機能名・別名でまず確認
-- 一致しない場合だけGeminiへ現在の実装済み機能一覧を渡して「既存機能で実現できるか」を判定
-- 実装済みで代替可能なら使い方を返す
-- 正式ロードマップ済みなら予定を返す
-- Geminiも未対応と判定した場合だけ、入力された機能名をそのまま `機能追加要望` DBへ登録
-
-Gemini障害時は「機能なし」と誤判定せず、自動要望登録もしません。
-
-`機能確認` だけを送った場合は、`機能確認 貸し借り` のように機能名も一緒に送る案内を返します。
-
-この補助判定は `GEMINI_API_KEY` と現在選択中のLite / Flashモデルを使います。登録済み機能に直接一致する場合はGeminiを呼ばないため、無料枠を不要に消費しません。
+登録済み機能で見つからない場合だけGeminiを使います。Geminiも未対応と判断した場合に限り、入力した機能名をそのまま要望DBへ登録します。
 
 ---
 
-# 9. Gemini AIモデル
+# 9. Phase 3B — 直前登録の修正・取り消し
+
+追加設定・追加DBは不要です。既存の家計簿DBと `NOTION_KAKEIBO_DATABASE_ID` を使います。
+
+実装ファイル:
+
+```text
+phase3b.py
+phase2_commands.py
+menu.py
+```
+
+LINE:
+
+```text
+直前登録
+直前修正
+直前取り消し
+```
+
+修正例:
+
+```text
+直前修正 金額 1500
+直前修正 店名 サミット
+直前修正 日付 2026-09-12
+直前修正 ジャンル 食費
+直前修正 支払方法 JCB
+```
+
+取り消しは `archived=true` を使い、物理削除しません。`直前取り消し` を送った時点ではまだ変更されず、確認画面の「取り消す」を押した後だけアーカイブします。
+
+---
+
+# 10. ボタンの即時タップ表示
+
+LINE Postbackは、そのままだとRenderの応答が返るまで押したか分かりづらいため、`displayText` を追加しています。
+
+対象:
+
+```text
+menu.py のPostback
+ui.py のジャンル・支払方法・カード分類系Postback
+gas/FinanceReports.gs の予算設定Postback
+```
+
+期待動作:
+
+```text
+ボタンを押す
+→ トーク画面に「▶ 食費」などが即時表示
+→ 数秒後にBotの処理結果が返る
+```
+
+LINEの message action ボタンは元から押した内容がトークに表示されるため、そのまま使います。
+
+---
+
+# 11. Gemini AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
 AI Flash  → gemini-3.6-flash
 AI Model  → 現在モデル確認
-AI 質問   → 選択中モデルで回答
 ```
-
-LINE AIの既定はLiteです。
 
 ---
 
-# 10. サミットチラシ → 生活カレンダー
+# 12. サミットチラシ
 
 状態: **実装完了・実機確認済み・日次運用中**
-
-対象:
-
-```text
-公式店舗ページ:
-https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer
-Shufoo店舗ID:
-264241
-```
-
-Apps Scriptへコピーする完成版ファイル:
-
-```text
-gas/FlyerDeals.gs
-gas/FlyerLifeCalendar.gs
-```
-
-実機成功結果:
 
 ```text
 detected=5
@@ -361,16 +364,16 @@ flyers=5
 deals=57
 ```
 
-LINE通知:
+GAS:
 
 ```text
-1〜7日間 → 🔥 今日・短期特売
-8日以上  → 📅 月間・長期特売
+gas/FlyerDeals.gs
+gas/FlyerLifeCalendar.gs
 ```
 
 ---
 
-# 11. GASトリガー
+# 13. GASトリガー
 
 | 関数 | 推奨 |
 |---|---|
@@ -385,28 +388,24 @@ LINE通知:
 
 ---
 
-# 12. 開発ロードマップ
+# 14. 開発ロードマップ
 
-Phase 3より先に次を実機確認します。
-
-```text
-Phase 2.8 毎月1日の予算設定案内
-Phase 2.9 貸し借り管理
-Phase 2.10 機能ナビ + Gemini補助判定 + 機能追加要望収集
-```
-
-確認完了後にPhase 3Aへ進みます。
+レシート系はユーザー判断で正式対象から削除済みです。
 
 ```text
-#32 レシート入力
-#33 複数品目レシート分類
-#34 自然文家計簿入力
-#36 よく使う支出テンプレート
+削除: #32 レシート入力
+削除: #33 複数品目レシート分類
+
+Phase 3A: #34 自然文家計簿入力 / #36 よく使う支出テンプレート
+Phase 3B: #37 直前登録取り消し / #38 直前登録修正（実装済み・要実機確認）
+Phase 3C: #39 / #40 / #45 / #46
 ```
+
+詳細は `DEVELOPMENT.md` を正本とします。
 
 ---
 
-# 13. セキュリティ
+# 15. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
