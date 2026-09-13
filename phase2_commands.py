@@ -8,6 +8,7 @@ import finance_phase2
 import help_guide
 import feature_guide
 import loan_manager
+import phase3a
 import phase3b
 
 JST = timezone(timedelta(hours=9), "JST")
@@ -72,11 +73,12 @@ def _update_goal_current(name, current):
 
 def build_phase2_help():
     return (
-        "【家計判断 / Phase 2】\n"
+        "【家計判断 / Phase 2〜3】\n"
         "2A 日々の判断\n"
         "・今日使える\n"
         "・ペース\n"
-        "・異常支出\n\n"
+        "・異常支出\n"
+        "・本日のレポート\n\n"
         "2B 月次判断\n"
         "・予算提案\n"
         "・月締め\n"
@@ -86,6 +88,8 @@ def build_phase2_help():
         "・貯金目標\n\n"
         "2.9 貸し借り\n"
         "・貸した / 借りた / 貸し借り一覧 / 精算\n\n"
+        "3A 入力強化\n"
+        "・自然文家計簿入力 / 支出テンプレート\n\n"
         "3B 直前登録の修正\n"
         "・直前登録 / 直前修正 / 直前取り消し\n\n"
         "目的から探すなら「？」、機能があるか聞くなら「機能確認 ○○」。"
@@ -93,9 +97,14 @@ def build_phase2_help():
 
 
 def handle_text_command(text):
-    """Phase 2・貸し借り・機能案内・Phase 3Bの同期コマンドを処理。該当しない場合はNoneを返す。"""
+    """Phase 2〜3・貸し借り・機能案内の同期コマンドを処理。該当しない場合はNoneを返す。"""
     message = (text or "").strip()
     lowered = message.lower()
+
+    # Phase 3Aは自然文や「予算 ○○ 金額」を扱うため、一般案内より先に判定する。
+    phase3a_reply = phase3a.handle_text_command(message)
+    if phase3a_reply is not None:
+        return phase3a_reply
 
     phase3b_reply = phase3b.handle_text_command(message)
     if phase3b_reply is not None:
