@@ -13,7 +13,6 @@ def _message_button(label, text, style="primary"):
 
 def _postback_button(label, data, style="primary", display_text=None):
     action = {"type": "postback", "label": label[:20], "data": data}
-    # Postbackは通常トーク画面に何も出ないため、押した瞬間に操作が見えるようdisplayTextを付ける。
     action["displayText"] = (display_text or f"▶ {label}")[:300]
     return {
         "type": "button",
@@ -55,10 +54,13 @@ def create_main_menu_flex():
 
     body += _section(
         "📊 家計簿・予算",
-        "記録、今月の状況、予算判断、月次レビュー",
+        "記録、今日/今月の状況、予算判断、レポート",
         [
+            _message_button("本日のレポート", "本日のレポート"),
             _message_button("今月のダッシュボード", "今月"),
             _postback_button("支出を入力する", "action=quick_input_kakeibo", display_text="▶ 支出を入力する"),
+            _message_button("自然文で支出入力", "自然文入力"),
+            _message_button("よく使う支出", "支出テンプレート"),
             _message_button("家計判断メニュー", "家計判断"),
             _message_button("今日使える額", "今日使える"),
             _message_button("支出ペースを見る", "ペース"),
