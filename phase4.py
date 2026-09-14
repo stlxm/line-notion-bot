@@ -1,0 +1,330 @@
+import html
+import os
+import re
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
+
+import requests
+
+JST = timezone(timedelta(hours=9), "JST")
+NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
+NOTION_MEMO_DATABASE_ID = os.environ.get("NOTION_MEMO_DATABASE_ID", "")
+NOTION_URL_DATABASE_ID = os.environ.get("NOTION_URL_DATABASE_ID", "")
+
+
+def _headers():
+    return {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
+    }
+
+
+def _db_schema(database_id):
+    if not database_id or not NOTION_API_KEY:
+        return {}
+    try:
+        res = requests.get(
+            f"https://api.notion.com/v1/databases/{database_id}",
+            headers=_headers(), timeout=10,
+        )
+        if res.status_code != 200:
+            print(f"Phase4 DB schema error ({res.status_code}): {res.text[:500]}")
+            return {}
+        return res.json().get("properties", {})
+    except Exception as e:
+        print(f"Phase4 DB schema exception: {e}")
+        return {}
+
+
+def _title_property(schema):
+    for name, prop in schema.items():
+        if prop.get("type") == "title":
+            return name
+    return None
+
+
+def _plain(prop):
+    ptype = (prop or {}).get("type")
+    values = (prop or {}).get(ptype, []) if ptype in {"title", "rich_text"} else []
+    return "".join(x.get("plain_text", "") for x in (values or []))
+
+
+def _parse_due_date(text):
+    now = datetime.now(JST).date()
+    value = str(text or "")
+    if "明後日" in value:
+        return (now + timedelta(days=2)).isoformat()
+    if "明日" in value:
+        return (now + timedelta(days=1)).isoformat()
+    if "今日" in value or "本日" in value:
+        return now.isoformat()
+
+    m = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?", value)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date().isoformat()
+        except ValueError:
+            pass
+
+    m = re.search(r"(?<!\d)(\d{1,2})[/-](\d{1,2})(?:まで|迄)?", value)
+    if m:
+        try:
+            candidate = datetime(now.year, int(m.group(1)), int(m.group(2))).date()
+            if candidate < now - timedelta(days=30):
+                candidate = candidate.replace(year=now.year + 1)
+            return candidate.isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def _strip_due_words(text):
+    value = str(text or "").strip()
+    value = re.sub(r"(?:今日|本日|明日|明後日)(?:まで|迄)?", "", value)
+    value = re.sub(r"20\d{2}[-/年]\d{1,2}[-/月]\d{1,2}日?(?:まで|迄)?", "", value)
+    value = re.sub(r"(?<!\d)\d{1,2}[/-]\d{1,2}(?:まで|迄)?", "", value)
+    return re.sub(r"\s{2,}", " ", value).strip(" 　、,")
+
+
+def classify_memo(text, forced=None):
+    if forced:
+        return forced
+    value = str(text or "").lower()
+    if any(k in value for k in ["買う", "購入", "買って", "買い物", "補充", "スーパー", "ドラッグストア"]):
+        return "買い物"
+    if any(k in value for k in ["提出", "申請", "連絡", "返信", "予約", "支払", "払う", "やる", "する", "確認"]):
+        return "やること"
+    if any(k in value for k in ["予定", "会議", "面談", "ライブ", "旅行", "病院", "美容院"]):
+        return "予定"
+    if any(k in value for k in ["アイデア", "案", "思いつ", "作りたい", "試したい"]):
+        return "アイデア"
+    return "その他"
+
+
+def add_smart_memo(text, forced_category=None):
+    if not NOTION_MEMO_DATABASE_ID:
+        return "メモDB IDが設定されていません。"
+    raw = str(text or "").strip()
+    if not raw:
+        return "内容を入力してください。例: メモ 住民票を明日までに提出"
+
+    due = _parse_due_date(raw)
+    cleaned = _strip_due_words(raw) or raw
+    category = classify_memo(cleaned, forced_category)
+    schema = _db_schema(NOTION_MEMO_DATABASE_ID)
+    title_name = _title_property(schema)
+    if not title_name:
+        return "メモDBのTitleプロパティを確認できませんでした。"
+
+    props = {
+        title_name: {"title": [{"text": {"content": cleaned[:2000]}}]},
+    }
+    if "日付" in schema and schema["日付"].get("type") == "date":
+        props["日付"] = {"date": {"start": datetime.now(JST).isoformat()}}
+    if due and "期限" in schema and schema["期限"].get("type") == "date":
+        props["期限"] = {"date": {"start": due}}
+    if "分類" in schema and schema["分類"].get("type") == "select":
+        props["分類"] = {"select": {"name": category}}
+    if "完了" in schema and schema["完了"].get("type") == "checkbox":
+        props["完了"] = {"checkbox": False}
+
+    try:
+        res = requests.post(
+            "https://api.notion.com/v1/pages", headers=_headers(),
+            json={"parent": {"database_id": NOTION_MEMO_DATABASE_ID}, "properties": props}, timeout=12,
+        )
+        if res.status_code != 200:
+            print(f"Phase4 memo save error ({res.status_code}): {res.text[:700]}")
+            return "メモの保存に失敗しました。"
+    except Exception as e:
+        return f"メモ保存中に通信エラーが発生しました: {e}"
+
+    lines = ["✅ メモを保存しました。", f"内容: {cleaned}", f"分類: {category}"]
+    if due:
+        lines.append(f"期限: {due}")
+    return "\n".join(lines)
+
+
+def _query_memos(page_size=100):
+    if not NOTION_MEMO_DATABASE_ID:
+        return []
+    try:
+        res = requests.post(
+            f"https://api.notion.com/v1/databases/{NOTION_MEMO_DATABASE_ID}/query",
+            headers=_headers(), json={"page_size": min(page_size, 100)}, timeout=12,
+        )
+        if res.status_code != 200:
+            print(f"Phase4 memo query error ({res.status_code}): {res.text[:500]}")
+            return []
+        return res.json().get("results", [])
+    except Exception as e:
+        print(f"Phase4 memo query exception: {e}")
+        return []
+
+
+def build_memo_list(category=None):
+    schema = _db_schema(NOTION_MEMO_DATABASE_ID)
+    title_name = _title_property(schema)
+    rows = []
+    for page in _query_memos():
+        props = page.get("properties", {})
+        if props.get("完了", {}).get("checkbox") is True:
+            continue
+        item_category = (props.get("分類", {}).get("select") or {}).get("name", "")
+        if category and item_category != category:
+            continue
+        due_obj = props.get("期限", {}).get("date") or {}
+        rows.append({
+            "id": page.get("id"),
+            "title": _plain(props.get(title_name, {})) or "無題",
+            "category": item_category or "未分類",
+            "due": (due_obj.get("start") or "")[:10],
+        })
+    rows.sort(key=lambda x: (x["due"] == "", x["due"], x["title"]))
+    label = "買い物リスト" if category == "買い物" else "メモ一覧"
+    if not rows:
+        return f"【{label}】\n現在、未完了の項目はありません。"
+    lines = [f"【{label}】"]
+    for item in rows[:30]:
+        suffix = f" / 期限 {item['due']}" if item["due"] else ""
+        cat = "" if category else f" / {item['category']}"
+        lines.append(f"・{item['title']}{cat}{suffix}")
+    if len(rows) > 30:
+        lines.append(f"\nほか {len(rows)-30} 件あります。")
+    if category == "買い物":
+        lines.append("\n購入済みは「買った 商品名」と送信できます。")
+    return "\n".join(lines)
+
+
+def complete_shopping_item(keyword):
+    key = str(keyword or "").strip()
+    if not key:
+        return "「買った 牛乳」のように商品名を続けてください。"
+    schema = _db_schema(NOTION_MEMO_DATABASE_ID)
+    title_name = _title_property(schema)
+    matches = []
+    for page in _query_memos():
+        props = page.get("properties", {})
+        category = (props.get("分類", {}).get("select") or {}).get("name", "")
+        done = props.get("完了", {}).get("checkbox") is True
+        title = _plain(props.get(title_name, {}))
+        if category == "買い物" and not done and key.lower() in title.lower():
+            matches.append((page.get("id"), title))
+    if not matches:
+        return f"買い物リストに「{key}」が見つかりませんでした。"
+    if len(matches) > 1:
+        names = "\n".join(f"・{x[1]}" for x in matches[:8])
+        return f"「{key}」に一致する項目が複数あります。もう少し詳しく指定してください。\n{names}"
+    try:
+        res = requests.patch(
+            f"https://api.notion.com/v1/pages/{matches[0][0]}", headers=_headers(),
+            json={"properties": {"完了": {"checkbox": True}}}, timeout=12,
+        )
+        if res.status_code == 200:
+            return f"✅「{matches[0][1]}」を購入済みにしました。"
+        return "購入済みへの更新に失敗しました。"
+    except Exception as e:
+        return f"更新中に通信エラーが発生しました: {e}"
+
+
+def _fetch_page_title(url):
+    try:
+        res = requests.get(
+            url, timeout=10, allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; LINE-Notion-Bot/1.0)"},
+        )
+        if res.status_code >= 400:
+            return ""
+        m = re.search(r"<title[^>]*>(.*?)</title>", res.text[:300000], flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            return ""
+        title = html.unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+        return title[:500]
+    except Exception as e:
+        print(f"URL title fetch error: {e}")
+        return ""
+
+
+def classify_url(url, title=""):
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    path = (parsed.path or "").lower()
+    text = f"{host} {path} {title}".lower()
+    if any(x in host for x in ["youtube.com", "youtu.be", "nicovideo.jp", "tiktok.com"]):
+        return "動画"
+    if any(x in host for x in ["x.com", "twitter.com", "instagram.com", "threads.net", "facebook.com"]):
+        return "SNS"
+    if any(x in host for x in ["amazon.", "rakuten.", "yahoo.co.jp", "zozo.jp", "mercari.com"]):
+        return "買い物"
+    if any(x in text for x in [".pdf", "/docs", "/document", "slides", "drive.google"]):
+        return "資料"
+    if any(x in text for x in ["news", "article", "blog", "note.com", "qiita.com", "zenn.dev", "medium.com"]):
+        return "記事"
+    return "その他"
+
+
+def save_url(url):
+    if not NOTION_URL_DATABASE_ID:
+        return "URL保存DBが設定されていません。"
+    schema = _db_schema(NOTION_URL_DATABASE_ID)
+    title_name = _title_property(schema)
+    if not title_name:
+        return "URL保存DBのTitleプロパティを確認できませんでした。"
+
+    page_title = _fetch_page_title(url)
+    parsed = urlparse(url)
+    domain = (parsed.netloc or "").removeprefix("www.")
+    category = classify_url(url, page_title)
+    now = datetime.now(JST)
+    props = {title_name: {"title": [{"text": {"content": url[:2000]}}]}}
+    if "ページタイトル" in schema:
+        props["ページタイトル"] = {"rich_text": [{"text": {"content": (page_title or domain or url)[:2000]}}]}
+    if "カテゴリ" in schema:
+        props["カテゴリ"] = {"select": {"name": category}}
+    if "ドメイン" in schema:
+        props["ドメイン"] = {"rich_text": [{"text": {"content": domain[:2000]}}]}
+    if "保存日時" in schema:
+        props["保存日時"] = {"date": {"start": now.isoformat()}}
+    if "時間" in schema and schema["時間"].get("type") == "rich_text":
+        props["時間"] = {"rich_text": [{"text": {"content": now.strftime("%Y-%m-%d %H:%M")}}]}
+    try:
+        res = requests.post(
+            "https://api.notion.com/v1/pages", headers=_headers(),
+            json={"parent": {"database_id": NOTION_URL_DATABASE_ID}, "properties": props}, timeout=12,
+        )
+        if res.status_code != 200:
+            print(f"Phase4 URL save error ({res.status_code}): {res.text[:700]}")
+            return "URLの保存に失敗しました。"
+    except Exception as e:
+        return f"URL保存中に通信エラーが発生しました: {e}"
+    title_label = page_title or "タイトル取得不可"
+    return f"✅ URLを保存しました。\nタイトル: {title_label}\nカテゴリ: {category}\nドメイン: {domain}"
+
+
+def handle_text_command(text):
+    message = str(text or "").strip()
+    normalized = message.replace("　", " ")
+
+    if normalized in ["Phase4", "phase4", "フェーズ4"]:
+        return (
+            "【Phase 4】\n"
+            "・メモ 住民票を明日までに提出\n"
+            "・買い物 牛乳\n"
+            "・買い物リスト\n"
+            "・買った 牛乳\n"
+            "・URLをそのまま送信 → タイトル/カテゴリ付き保存"
+        )
+    if normalized.startswith("買い物 "):
+        return add_smart_memo(normalized[4:].strip(), forced_category="買い物")
+    if normalized in ["買い物リスト", "買物リスト", "買うもの"]:
+        return build_memo_list("買い物")
+    if normalized.startswith("買った "):
+        return complete_shopping_item(normalized[4:].strip())
+    if normalized.startswith("メモ "):
+        return add_smart_memo(normalized[3:].strip())
+    if normalized in ["メモ一覧", "メモ確認"]:
+        return build_memo_list()
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return save_url(normalized)
+    return None
