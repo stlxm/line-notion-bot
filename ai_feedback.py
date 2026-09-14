@@ -9,10 +9,7 @@ NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_AI_FEEDBACK_DATABASE_ID = os.environ.get("NOTION_AI_FEEDBACK_DATABASE_ID", "")
 JST = timezone(timedelta(hours=9), "JST")
 
-# 直前のAI質問・回答は、ユーザーが「AI改善」を実行するまで短期保持します。
-# Render再起動時には消えるため、永続化されるのは改善内容を確定した後です。
 _recent_interactions = {}
-
 MAX_FEEDBACK_ROWS = 100
 MAX_RELEVANT_FEEDBACK = 3
 
@@ -39,39 +36,77 @@ def get_last_ai_interaction(user_id):
     return _recent_interactions.get(user_id)
 
 
+def get_latest_ai_interaction():
+    if not _recent_interactions:
+        return None
+    return max(_recent_interactions.values(), key=lambda x: x.get("saved_at", 0))
+
+
 def clear_last_ai_interaction(user_id):
     _recent_interactions.pop(user_id, None)
 
 
-def save_feedback(question, ai_answer, expected_answer):
-    """AI改善ログDBへ質問・実回答・期待回答を保存します。"""
+def _extract_answer_metadata(answer):
+    text = str(answer or "")
+    refs = ""
+    reason = ""
+    ref_match = re.search(r"【参照DB】\s*\n?(.*?)(?=\n【|$)", text, flags=re.DOTALL)
+    if ref_match:
+        refs = re.sub(r"^[・\-]\s*", "", ref_match.group(1).strip(), flags=re.MULTILINE)
+        refs = " / ".join(x.strip(" ・-") for x in refs.splitlines() if x.strip())
+    reason_match = re.search(r"【根拠】\s*\n?(.*?)(?=\n【|$)", text, flags=re.DOTALL)
+    if reason_match:
+        reason = " ".join(x.strip() for x in reason_match.group(1).splitlines() if x.strip())
+    return refs[:1900], reason[:1900]
+
+
+def _create_feedback_row(question, ai_answer, expected_answer="", rating="改善"):
     if not NOTION_AI_FEEDBACK_DATABASE_ID:
         return False, "NOTION_AI_FEEDBACK_DATABASE_ID が設定されていません。"
-
-    payload = {
-        "parent": {"database_id": NOTION_AI_FEEDBACK_DATABASE_ID},
-        "properties": {
-            "質問": {"title": [{"text": {"content": question[:2000]}}]},
-            "AI回答": {"rich_text": [{"text": {"content": ai_answer[:2000]}}]},
-            "期待する回答": {"rich_text": [{"text": {"content": expected_answer[:2000]}}]},
-            "登録日時": {"date": {"start": datetime.now(JST).isoformat()}},
-        },
+    refs, reason = _extract_answer_metadata(ai_answer)
+    props = {
+        "質問": {"title": [{"text": {"content": question[:2000]}}]},
+        "AI回答": {"rich_text": [{"text": {"content": ai_answer[:2000]}}]},
+        "期待する回答": {"rich_text": [{"text": {"content": expected_answer[:2000]}}]},
+        "登録日時": {"date": {"start": datetime.now(JST).isoformat()}},
+        "評価": {"select": {"name": rating}},
+        "参照DB": {"rich_text": [{"text": {"content": refs}}]},
+        "根拠": {"rich_text": [{"text": {"content": reason}}]},
     }
-
     try:
         response = requests.post(
-            "https://api.notion.com/v1/pages",
-            headers=_headers(),
-            json=payload,
-            timeout=10,
+            "https://api.notion.com/v1/pages", headers=_headers(),
+            json={"parent": {"database_id": NOTION_AI_FEEDBACK_DATABASE_ID}, "properties": props}, timeout=10,
         )
         if response.status_code == 200:
-            return True, "AI改善ログに保存しました。次回以降の似た質問で参考にします。"
-        print(f"AI改善ログ保存エラー ({response.status_code}): {response.text}")
-        return False, "AI改善ログの保存に失敗しました。Notion DBのプロパティ名と型を確認してください。"
+            return True, "AI改善ログに保存しました。"
+        print(f"AI feedback save error ({response.status_code}): {response.text[:700]}")
+        return False, "AI改善ログの保存に失敗しました。"
     except Exception as e:
-        print(f"AI改善ログ保存エラー: {e}")
+        print(f"AI feedback save error: {e}")
         return False, f"AI改善ログの保存中にエラーが発生しました: {e}"
+
+
+def save_feedback(question, ai_answer, expected_answer):
+    success, message = _create_feedback_row(question, ai_answer, expected_answer, "改善")
+    if success:
+        return True, "AI改善ログに保存しました。次回以降の似た質問で回答方法とDB選択の参考にします。"
+    return False, message
+
+
+def save_rating(rating):
+    normalized = "👍" if rating in {"👍", "good", "up", "1"} else "👎" if rating in {"👎", "bad", "down", "0"} else ""
+    if not normalized:
+        return False, "評価は 👍 または 👎 を指定してください。"
+    item = get_latest_ai_interaction()
+    if not item:
+        return False, "評価できる直前のAI回答がありません。先に「AI 質問内容」を使ってください。"
+    success, _ = _create_feedback_row(item["question"], item["answer"], "", normalized)
+    if not success:
+        return False, "AI評価の保存に失敗しました。"
+    if normalized == "👍":
+        return True, "👍 評価を保存しました。今後のDB選択・回答改善の参考にします。"
+    return True, "👎 評価を保存しました。具体的に直したい場合は続けて「AI改善」と送ってください。"
 
 
 def _plain_text(prop):
@@ -83,22 +118,21 @@ def _plain_text(prop):
     if p_type == "date":
         value = prop.get("date") or {}
         return value.get("start", "")
+    if p_type == "select":
+        value = prop.get("select") or {}
+        return value.get("name", "")
     return ""
 
 
 def _query_feedback_rows():
     if not NOTION_AI_FEEDBACK_DATABASE_ID:
         return []
-
     url = f"https://api.notion.com/v1/databases/{NOTION_AI_FEEDBACK_DATABASE_ID}/query"
-    payload = {
-        "page_size": MAX_FEEDBACK_ROWS,
-        "sorts": [{"property": "登録日時", "direction": "descending"}],
-    }
+    payload = {"page_size": MAX_FEEDBACK_ROWS, "sorts": [{"property": "登録日時", "direction": "descending"}]}
     try:
         response = requests.post(url, headers=_headers(), json=payload, timeout=10)
         if response.status_code != 200:
-            print(f"AI改善ログ取得エラー ({response.status_code}): {response.text}")
+            print(f"AI改善ログ取得エラー ({response.status_code}): {response.text[:700]}")
             return []
         rows = []
         for page in response.json().get("results", []):
@@ -108,6 +142,9 @@ def _query_feedback_rows():
                 "answer": _plain_text(props.get("AI回答", {})),
                 "expected": _plain_text(props.get("期待する回答", {})),
                 "date": _plain_text(props.get("登録日時", {})),
+                "rating": _plain_text(props.get("評価", {})),
+                "sources": _plain_text(props.get("参照DB", {})),
+                "reason": _plain_text(props.get("根拠", {})),
             })
         return rows
     except Exception as e:
@@ -131,37 +168,31 @@ def _similarity(question, past_question):
     b = _normalize(past_question)
     if not a or not b:
         return 0.0
-
     seq = SequenceMatcher(None, a, b).ratio()
     a_grams = _char_ngrams(a)
     b_grams = _char_ngrams(b)
     union = a_grams | b_grams
     jaccard = len(a_grams & b_grams) / len(union) if union else 0.0
-
-    # 完全包含は強く評価。日本語でも追加の形態素解析ライブラリなしで動くようにする。
     contains_bonus = 0.25 if (a in b or b in a) else 0.0
     return min(1.0, seq * 0.55 + jaccard * 0.45 + contains_bonus)
 
 
 def get_relevant_feedback(question, limit=MAX_RELEVANT_FEEDBACK):
-    """Geminiを使わず、過去質問との文字列類似度で改善例を最大3件選びます。"""
     scored = []
     for row in _query_feedback_rows():
-        if not row.get("question") or not row.get("expected"):
+        if not row.get("question"):
             continue
         score = _similarity(question, row["question"])
         if score >= 0.18:
             scored.append((score, row))
-
     scored.sort(key=lambda x: x[0], reverse=True)
     return [row for _, row in scored[:limit]]
 
 
 def build_feedback_context(question):
-    examples = get_relevant_feedback(question)
+    examples = [x for x in get_relevant_feedback(question) if x.get("expected")]
     if not examples:
         return ""
-
     lines = [
         "【過去のAI改善例】",
         "以下は過去にユーザーが『こう答えてほしかった』と修正した例です。",
@@ -176,3 +207,17 @@ def build_feedback_context(question):
             f"ユーザーが期待した回答: {item['expected']}",
         ])
     return "\n".join(lines)
+
+
+def get_router_hint(question):
+    """#72: 過去の類似AI評価/改善ログから、以前参照したDB名をルーターの補助語として返す。"""
+    hints = []
+    for row in get_relevant_feedback(question, limit=5):
+        if row.get("rating") not in {"👎", "改善"}:
+            continue
+        sources = row.get("sources", "")
+        for name in re.split(r"\s*/\s*|[,、]", sources):
+            name = name.strip()
+            if name and name not in hints:
+                hints.append(name)
+    return hints[:2]
