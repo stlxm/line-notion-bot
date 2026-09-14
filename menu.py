@@ -126,11 +126,13 @@ def create_main_menu_flex():
 
     body += _section(
         "🤖 AI検索・改善",
-        "Lite / Flashを切替可能。明示した質問だけGeminiを使用",
+        "回答の参照DB・根拠・評価・Notion DBヘルスを確認",
         [
             _message_button("AI検索の使い方", "AI"),
+            _message_button("Phase 5の使い方", "Phase5"),
+            _message_button("DBヘルスチェック", "DBヘルスチェック"),
             _message_button("AIモデルを確認", "AI Model"),
-            _message_button("直前のAI回答を改善", "AI改善"),
+            _message_button("直前のAI回答を改善", "AI改善", "secondary"),
         ],
         "#F57C00",
     )
