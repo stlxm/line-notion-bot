@@ -7,10 +7,7 @@ import requests
 
 JST = timezone(timedelta(hours=9), "JST")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
-NOTION_FLYER_DATABASE_ID = os.environ.get(
-    "NOTION_FLYER_DATABASE_ID",
-    "684f959e451047389505a95ed368a7d6",
-)
+NOTION_FLYER_DATABASE_ID = os.environ.get("NOTION_FLYER_DATABASE_ID", "").strip()
 STORE_NAME = "サミット ミナノ分倍河原店"
 OFFICIAL_URL = "https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer"
 MAX_RESULTS = 20
@@ -100,7 +97,6 @@ def _dedupe(items):
         if old is None:
             chosen[key] = item
             continue
-        # 短期特売を優先。期間同一なら備考が詳しい方を残す。
         if _span_days(item) < _span_days(old) or (
             _span_days(item) == _span_days(old) and len(item["notes"]) > len(old["notes"])
         ):
@@ -144,6 +140,8 @@ def build_today_deals_text():
     today = datetime.now(JST).date().isoformat()
     if not NOTION_API_KEY:
         return "特売情報を取得できません。Renderの NOTION_API_KEY を確認してください。"
+    if not NOTION_FLYER_DATABASE_ID:
+        return "特売情報を取得できません。Renderの NOTION_FLYER_DATABASE_ID を設定してください。"
     deals = get_today_deals()
     lines = [f"🛒 {STORE_NAME}", f"【{today} の特売】", ""]
     if not deals:
