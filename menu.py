@@ -56,8 +56,6 @@ def _called_from_unknown_fallback():
 
 
 def create_main_menu_flex():
-    # app.pyの未認識コマンド末尾は従来この関数を自動表示していた。
-    # その経路だけ選択画面を出さず、短い案内にする。
     if _called_from_unknown_fallback():
         return TextMessage(text="「ヘルプ」か「メニュー」と送ってください。")
 
@@ -154,9 +152,9 @@ def create_main_menu_flex():
                 _postback_button("メモを追加", "action=quick_input_memo"),
                 _message_button("メモ一覧", "メモ一覧"),
                 _message_button("メモを削除", "メモ削除", "secondary"),
-                _message_button("買い物を追加", "買い物"),
+                _message_button("買い物を追加", "機能確認 買い物リスト"),
                 _message_button("買い物リスト", "買い物リスト"),
-                _message_button("購入済みにする", "買った", "secondary"),
+                _message_button("購入済みにする", "機能確認 買い物リスト", "secondary"),
             ],
             "📝",
         ),
@@ -165,7 +163,7 @@ def create_main_menu_flex():
             "今日の特売とURL保存",
             [
                 _message_button("今日の特売", "特売情報"),
-                _message_button("URLを保存", "URL保存"),
+                _message_button("URLを保存", "機能確認 URL保存"),
             ],
             "🛒",
         ),
