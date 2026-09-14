@@ -7,6 +7,7 @@ import card_queue
 import finance_phase2
 import help_guide
 import feature_guide
+import flyer_command
 import loan_manager
 import phase3a
 import phase3b
@@ -86,6 +87,8 @@ def build_phase2_help():
         "2C 将来予測・目標\n"
         "・年間予測\n"
         "・貯金目標\n\n"
+        "2.7 特売\n"
+        "・特売 / 特売情報 / 今日の特売\n\n"
         "2.9 貸し借り\n"
         "・貸した / 借りた / 貸し借り一覧 / 精算\n\n"
         "3A 入力強化\n"
@@ -97,11 +100,10 @@ def build_phase2_help():
 
 
 def handle_text_command(text):
-    """Phase 2〜3・貸し借り・機能案内の同期コマンドを処理。該当しない場合はNoneを返す。"""
+    """Phase 2〜3・特売・貸し借り・機能案内の同期コマンドを処理。該当しない場合はNoneを返す。"""
     message = (text or "").strip()
     lowered = message.lower()
 
-    # Phase 3Aは自然文や「予算 ○○ 金額」を扱うため、一般案内より先に判定する。
     phase3a_reply = phase3a.handle_text_command(message)
     if phase3a_reply is not None:
         return phase3a_reply
@@ -109,6 +111,10 @@ def handle_text_command(text):
     phase3b_reply = phase3b.handle_text_command(message)
     if phase3b_reply is not None:
         return phase3b_reply
+
+    flyer_reply = flyer_command.handle_text_command(message)
+    if flyer_reply is not None:
+        return flyer_reply
 
     feature_reply = feature_guide.handle_feature_question(message)
     if feature_reply is not None:
@@ -238,7 +244,6 @@ def handle_text_command(text):
 
 
 def parse_monthly_review_command(text):
-    """月次レビューなら対象月を返す。非該当はNone、形式不正はFalse。"""
     message = (text or "").strip()
     if message == "月次レビュー":
         return datetime.now(JST).strftime("%Y-%m")
