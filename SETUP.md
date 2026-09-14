@@ -53,6 +53,55 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 `予算 お菓子 3000` のように未作成ジャンルを設定した場合、Botが `お菓子予算` Number列を自動追加してから保存します。
 
+## メモDB — Phase 4
+
+Database ID:
+
+```text
+3d60efb323d08089b369df4e332d7e36
+```
+
+環境変数:
+
+```text
+NOTION_MEMO_DATABASE_ID
+```
+
+Phase 4実装に合わせ、既存DBへ次を追加済みです。
+
+| 名前 | 型 | 用途 |
+|---|---|---|
+| `メモ` | Title | 内容 |
+| `日付` | Date | 登録日時 |
+| `期限` | Date | #50 メモ期限 |
+| `分類` | Select | 買い物 / やること / 予定 / アイデア / その他 |
+| `完了` | Checkbox | 買い物リスト等の完了状態 |
+
+## 後で見るURL DB — Phase 4
+
+Database ID:
+
+```text
+3d40efb323d0806b927ce286e442add6
+```
+
+環境変数:
+
+```text
+NOTION_URL_DATABASE_ID
+```
+
+既存の `URL` / `時間` に加えて次を追加済みです。
+
+| 名前 | 型 | 用途 |
+|---|---|---|
+| `ページタイトル` | Rich text | #56 Webタイトル |
+| `カテゴリ` | Select | 記事 / 買い物 / 動画 / SNS / 資料 / その他 |
+| `ドメイン` | Rich text | URLのホスト名 |
+| `保存日時` | Date | 保存時刻 |
+
+URLのタイトル取得・カテゴリ分類は `phase4.py` がルールベースで行い、Geminiは使いません。
+
 ## 固定費DB
 
 環境変数: `NOTION_FIXED_DATABASE_ID`
@@ -85,24 +134,12 @@ NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
 
 ## 特売・生活カレンダーDB
 
-実運用中の `生活カレンダー` DB:
-
 ```text
 Database ID: 684f959e451047389505a95ed368a7d6
 NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
 
-`3d90efb323d080b5999bed1820a6665e` は削除済みの旧 `特売カレンダー` です。Render/GASともこの旧IDを使わないでください。
-
-主項目:
-
-```text
-予定名 / 日付 / 種類 / 金額 / 内容 / 価格 / 容量・単位 / 店舗 / 備考
-優先度 / チラシURL / チラシ識別 / 識別キー / 元チラシID / 元チラシ名
-元画像URL / 確認状態 / 有効 / 更新日時
-```
-
-LINEの `特売情報` コマンドはこのDBを読みます。
+`3d90efb323d080b5999bed1820a6665e` は削除済みの旧 `特売カレンダー` です。
 
 ## チラシ一覧
 
@@ -139,19 +176,39 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
-特売コマンド用:
-
-```text
-NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
-```
-
-`flyer_command.py` は旧削除DB `3d90ef...` が環境変数に残っている場合でも、現在の生活カレンダーへ退避します。ただしRenderの環境変数自体も正しいIDへ直してください。
+Phase 4で新しい環境変数は増えません。既存の `NOTION_MEMO_DATABASE_ID` と `NOTION_URL_DATABASE_ID` を使います。
 
 GitHub更新後はRenderを最新版へ再デプロイしてください。
 
 ---
 
-# 4. GAS Script Properties
+# 4. Phase 4 実機確認
+
+```text
+メモ 住民票を明日までに提出
+メモ一覧
+買い物 牛乳
+買い物 洗濯ネット
+買い物リスト
+買った 牛乳
+https://example.com/
+機能確認 買い物リスト
+機能確認 URL分類
+```
+
+確認ポイント:
+
+```text
+・メモDBに期限 / 分類 / 完了が保存される
+・買い物リストは未完了の買い物だけ表示される
+・買った 商品名 で1件だけ一致した項目を完了にする
+・URL DBにページタイトル / カテゴリ / ドメイン / 保存日時が入る
+・URLタイトル取得失敗でもURL自体は保存できる
+```
+
+---
+
+# 5. GAS Script Properties
 
 共通:
 
@@ -179,22 +236,9 @@ FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 
 Apps Scriptタイムゾーン: `(GMT+09:00) Tokyo`
 
-秘密値は `.gs` ファイルへ直書きせずScript Propertiesへ保存します。
-
 ---
 
-# 5. 今日の特売コマンド
-
-実装ファイル:
-
-```text
-flyer_command.py
-phase2_commands.py
-menu.py
-feature_guide.py
-```
-
-LINE:
+# 6. 今日の特売コマンド
 
 ```text
 特売
@@ -204,79 +248,25 @@ LINE:
 サミット特売
 ```
 
-取得条件:
-
-```text
-店舗 = サミット ミナノ分倍河原店
-種類 = 特売
-確認状態 = 確認済み
-有効 = true
-日付が今日を含む
-```
-
-短期特売を先に表示し、月間・長期特売を後に表示します。最大20件です。
-
-実機確認:
-
-```text
-1. Renderの NOTION_FLYER_DATABASE_ID を 684f959e451047389505a95ed368a7d6 に修正
-2. GitHub最新版をRenderへ再デプロイ
-3. LINEで「特売情報」
-4. メニュー → 🛒 特売・買い物 → 今日の特売を見る
-5. 「機能確認 特売情報」
-```
-
-404 `object_not_found` が出る場合は、対象DBが `LINE bot Access` Integrationへ共有されているかも確認します。
+取得元は実運用中の `生活カレンダー` DBです。404 `object_not_found` が出る場合は、DB IDと `LINE bot Access` Integration共有を確認します。
 
 ---
 
-# 6. Phase 3A — 自然文家計簿入力
+# 7. Phase 3A / 3B
 
 ```text
 自然文入力
 今日サミットで2380円使った
-昨日コンビニで540円買った
-```
-
-追加DBは不要です。既存の家計簿DBのSelect候補を使います。最終確認前には保存しません。
-
----
-
-# 7. よく使う支出テンプレート
-
-```text
 支出テンプレート
-```
-
-直近90日の家計簿から `店名 + ジャンル + 支払方法` を集計し、頻度順に候補を表示します。
-
----
-
-# 8. 本日のレポート
-
-```text
 本日のレポート
-今日のレポート
-日次レポート
-```
-
-今日の支出、ジャンル内訳、最大支出、今月累計、残り予算、1日目安、カード未処理件数を表示します。
-
----
-
-# 9. Phase 3B — 直前登録の修正・取り消し
-
-```text
 直前登録
 直前修正
 直前取り消し
 ```
 
-取り消しは `archived=true` を使い、物理削除しません。
-
 ---
 
-# 10. 毎月1日の予算設定案内
+# 8. 毎月1日の予算設定案内
 
 GAS:
 
@@ -288,7 +278,7 @@ installMonthlyBudgetNoticeTrigger
 
 ---
 
-# 11. 貸し借り管理
+# 9. 貸し借り管理
 
 ```text
 貸した 田中 3000 ランチ代
@@ -299,19 +289,7 @@ installMonthlyBudgetNoticeTrigger
 
 ---
 
-# 12. 機能確認
-
-```text
-機能確認 特売情報
-機能確認 貸し借り
-機能確認 自然文家計簿
-```
-
-登録済み機能で見つからない場合だけGeminiを使います。
-
----
-
-# 13. AIモデル
+# 10. AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
@@ -321,7 +299,7 @@ AI Model  → 現在モデル確認
 
 ---
 
-# 14. GASトリガー
+# 11. GASトリガー
 
 ```text
 checkCardEmails                         1時間ごと
@@ -336,19 +314,19 @@ sendWeeklyFinanceReport                 毎週日曜20時ごろ
 
 ---
 
-# 15. 開発ロードマップ
+# 12. 開発順
 
 ```text
-Phase 3A: #34 / #36 実装済み・要実機確認
-Phase 3B: #37 / #38 実装済み・要実機確認
-Phase 3C: #39 / #40 / #45 / #46 未着手
+Phase 4 — 実装済み・要実機確認
+Phase 5 — 次に実装
+Phase 3C — Phase 5の後
+Phase 6
+Phase 7
 ```
-
-特売コマンドはPhase 2.7の操作性向上として追加しています。
 
 ---
 
-# 16. セキュリティ
+# 13. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
