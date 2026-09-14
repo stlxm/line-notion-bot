@@ -33,7 +33,6 @@ def _section(title, description, buttons, color):
 
 
 def create_main_menu_flex():
-    """現在使える機能を大分類で見やすくまとめる。"""
     body = [{
         "type": "text",
         "text": "使いたい機能を選んでください。迷ったら「目的から探す」か「この機能ある？」を使えます。",
@@ -70,6 +69,15 @@ def create_main_menu_flex():
             _message_button("固定費一覧を見る", "固定費一覧"),
         ],
         "#1DB446",
+    )
+
+    body += _section(
+        "🛒 特売・買い物",
+        "今日使えるサミットの確認済み特売をNotionから表示",
+        [
+            _message_button("今日の特売を見る", "特売情報"),
+        ],
+        "#E67E22",
     )
 
     body += _section(
