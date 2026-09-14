@@ -7,73 +7,41 @@
 - `MAINTENANCE.md`: 障害切り分け、復旧、日常保守
 - `DEVELOPMENT.md`: 長期ロードマップと進捗
 - `UI_DESIGN.md`: LINE UI・Postback設計
-- `PHASE1_TEST.md`: Phase 1実機テスト
-- `PHASE2_TEST.md`: Phase 2実機テスト
-- `PHASE3_TEST.md`: Phase 3A/3B実機テスト
-- `PHASE5_TEST.md`: Phase 4/5実機テスト
-- `FLYER_TEST.md`: サミットチラシ・生活カレンダー実機テスト
+- `PHASE1_TEST.md`, `PHASE2_TEST.md`, `PHASE3_TEST.md`, `PHASE5_TEST.md`, `FLYER_TEST.md`
 - `gas/README.md`: GAS詳細
 
 ---
 
-# 1. 必要サービス
-
-GitHub / Render / LINE Developers / Notion / Gmail / Google Apps Script / Google AI Studio
-
-Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作成・更新を許可します。
-
----
-
-# 2. Phase 4 / 5で使うNotion DB
-
-## メモDB
+# 1. 主要Notion DB
 
 ```text
-Database ID: 3d60efb323d08089b369df4e332d7e36
-環境変数: NOTION_MEMO_DATABASE_ID
+メモDB: 3d60efb323d08089b369df4e332d7e36
+後で見るURL DB: 3d40efb323d0806b927ce286e442add6
+AI改善ログ DB: 3d70efb323d0806faa10ed0ec36351cb
+貸し借り管理DB: f9b2c4eb59ea4c13b968f8d9b48663bc
+機能追加要望DB: 76e4fe5d248e4fd1a48f45e9bdd59e8c
+生活カレンダーDB: 684f959e451047389505a95ed368a7d6
+チラシ一覧DB: fdd0c0ce50974273b9b88f5272858e90
 ```
 
-Phase 4で追加済み:
-
-| 名前 | 型 |
-|---|---|
-| `期限` | Date |
-| `分類` | Select (`買い物/やること/予定/アイデア/その他`) |
-| `完了` | Checkbox |
-
-## 後で見るURL DB
+Phase 4でメモDBへ追加済み:
 
 ```text
-Database ID: 3d40efb323d0806b927ce286e442add6
-環境変数: NOTION_URL_DATABASE_ID
+期限 Date
+分類 Select: 買い物 / やること / 予定 / アイデア / その他
+完了 Checkbox
 ```
 
-Phase 4で追加済み:
-
-| 名前 | 型 |
-|---|---|
-| `ページタイトル` | Rich text |
-| `カテゴリ` | Select (`記事/買い物/動画/SNS/資料/その他`) |
-| `ドメイン` | Rich text |
-| `保存日時` | Date |
-
-## AI改善ログ DB
+後で見るURL DBへ追加済み:
 
 ```text
-Database ID: 3d70efb323d0806faa10ed0ec36351cb
-環境変数: NOTION_AI_FEEDBACK_DATABASE_ID
+ページタイトル Rich text
+カテゴリ Select: 記事 / 買い物 / 動画 / SNS / 資料 / その他
+ドメイン Rich text
+保存日時 Date
 ```
 
-既存:
-
-```text
-質問 Title
-AI回答 Rich text
-期待する回答 Rich text
-登録日時 Date
-```
-
-Phase 5で追加済み:
+AI改善ログ DBへ追加済み:
 
 ```text
 評価 Select: 👍 / 👎 / 改善
@@ -81,18 +49,9 @@ Phase 5で追加済み:
 根拠 Rich text
 ```
 
-## 生活カレンダー
-
-```text
-Database ID: 684f959e451047389505a95ed368a7d6
-NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
-```
-
-旧 `3d90efb323d080b5999bed1820a6665e` は削除済みDBなので使用しません。
-
 ---
 
-# 3. Render環境変数
+# 2. Render環境変数
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
@@ -119,157 +78,129 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
-Phase 4/5で新しい環境変数は増えません。AI回答直後の評価ボタンPushでも既存の `LINE_CHANNEL_ACCESS_TOKEN` を利用します。
-
-GitHub更新後はRenderを最新版へ再デプロイしてください。
-
----
-
-# 4. Phase 4
-
-実装ファイル:
-
-```text
-phase4.py
-feature_guide.py
-menu.py
-```
-
-LINE:
-
-```text
-Phase4
-メモ 住民票を明日までに提出
-メモ レポートを金曜までに出す
-メモ 更新手続きを3日後までに確認
-メモ 書類提出 9月20日まで
-メモ 課題を来週月曜までに終える
-メモ一覧
-買い物 牛乳
-買い物リスト
-買った 牛乳
-https://example.com/
-```
-
-期限は本文から自動抽出します。対応例:
-
-```text
-今日 / 明日 / 明後日
-3日後 / 2週間後
-金曜 / 今週金曜 / 来週月曜
-今週中 / 来週中
-今月末 / 来月末
-9/20 / 9月20日 / 2026-09-20
-```
-
-期限表現が書かれていないメモは `期限なし` です。タスク内容だけから期限を勝手に推測しません。
-
-URL取得先がJavaScript必須・ログイン必須・Bot拒否の場合、タイトルを取得できないことがあります。その場合でもURL本体は保存する設計です。
-
----
-
-# 5. Phase 5
-
-実装ファイル:
-
-```text
-phase5.py
-ai_engine.py
-ai_feedback.py
-phase2_commands.py
-feature_guide.py
-menu.py
-```
-
-## AI回答の参照DB・根拠
-
-```text
-AI 今月の食費を分析して
-```
-
-回答末尾に `【参照DB】` と `【根拠】` が付きます。参照DBは `notion_helper` が実際に選択して文脈化したDB名から生成します。
-
-## AI評価
-
-AI回答本文の直後に、別メッセージとして次のFlexボタンを自動Pushします。
-
-```text
-[👍 良い] [👎 改善したい]
-```
-
-ボタンはMessage actionで、それぞれ `AI評価 👍` / `AI評価 👎` を送信します。押した瞬間に評価内容がトークへ表示されます。
-
-手動コマンドも利用可能です。
-
-```text
-AI評価 👍
-AI評価 👎
-```
-
-`👎` の後に `AI改善` を使うと、既存の期待回答入力フローを利用できます。
-
-## AI改善 → DBルーター
-
-過去の類似 `👎 / 改善` ログに `参照DB` が保存されている場合、そのDB名を次回のルーティングクエリへ補助情報として加えます。過去ログの回答内容を事実として再利用するものではありません。
-
-## Notion DBヘルスチェック
-
-```text
-DBヘルスチェック
-Notion DBヘルスチェック
-```
-
-確認内容:
-
-```text
-・必要な環境変数が設定されているか
-・Notion APIからDBを取得できるか
-・Phase 4/5などで必要な主要プロパティが存在するか
-```
-
-環境変数の値やAPIキーそのものはLINEへ表示しません。
-
----
-
-# 6. Phase 4 / 5 実機確認
-
-```text
-メニュー
-Phase4
-メモ 住民票を明日までに提出
-メモ レポートを金曜までに出す
-メモ一覧
-買い物 牛乳
-買い物リスト
-買った 牛乳
-https://example.com/
-Phase5
-DBヘルスチェック
-AI 今月の食費を分析して
-→ 回答直後の 👍 / 👎 ボタンを押す
-```
-
-`PHASE5_TEST.md` に詳細手順を記載します。
-
----
-
-# 7. 特売
+特売:
 
 ```text
 NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
 
-```text
-特売
-特売情報
-今日の特売
-```
+旧 `3d90efb323d080b5999bed1820a6665e` は削除済みDBなので使用しません。
 
-LINEコマンドは実機確認済みです。
+GitHub更新後はRenderを最新版へ再デプロイしてください。
 
 ---
 
-# 8. GAS Script Properties
+# 3. メニュー仕様
+
+`メニュー` は開発フェーズ名ではなく、機能単位で表示します。
+
+```text
+案内・入口
+家計簿・入力
+予算・分析
+月次・固定費・貯金
+修正・取り消し
+カード
+貸し借り
+メモ・買い物
+特売・あとで見る
+AI
+Notion・データ
+```
+
+`Phase4` / `Phase5` のような開発用ラベルはメニューに表示しません。
+
+メニューはFlex carouselなので横スワイプしてカテゴリを移動します。
+
+---
+
+# 4. 未認識コマンド
+
+未認識入力で毎回メニューFlexを自動表示しない設計です。
+
+```text
+「ヘルプ」か「メニュー」と送ってください。
+```
+
+必要なときだけユーザーがメニューを開きます。
+
+---
+
+# 5. `コマンド` 一覧
+
+`コマンド` と送ると、実装済みコマンドをカテゴリ別にまとめて表示します。
+
+対象:
+
+```text
+案内
+家計簿入力・確認
+予算・分析
+月次
+固定費
+貯金目標
+修正・取り消し
+貸し借り
+カード
+メモ・買い物
+特売・URL
+AI
+Notion
+```
+
+新しいコマンドを追加した場合は、`help_guide.py` の `command_list_text()` にも追加します。
+
+---
+
+# 6. Phase 4
+
+```text
+メモ 住民票を明日までに提出
+メモ レポートを金曜までに出す
+メモ一覧
+買い物 牛乳
+買い物リスト
+買った 牛乳
+https://example.com/
+```
+
+メモ期限は、今日 / 明日 / 明後日 / N日後 / 曜日 / 今週中 / 来週中 / 今月末 / 来月末 / 9月20日 / YYYY-MM-DD などを認識します。期限が書かれていなければ自動推測しません。
+
+URL取得先がJavaScript必須・ログイン必須・Bot拒否の場合、タイトルを取得できないことがあります。その場合でもURL本体は保存します。
+
+---
+
+# 7. Phase 5
+
+```text
+AI 今月の食費を分析して
+AI評価 👍
+AI評価 👎
+AI改善
+DBヘルスチェック
+```
+
+AI回答の後ろに `【参照DB】` と `【根拠】` を付け、さらに `👍 良い / 👎 改善したい` の評価ボタンを表示します。
+
+---
+
+# 8. 貸し借り
+
+```text
+貸した
+貸した 田中 3000 ランチ代
+借りた
+借りた 田中 2000
+貸し借り一覧
+精算
+精算 田中 3000
+```
+
+単独コマンドは入力形式の案内用です。
+
+---
+
+# 9. GAS Script Properties
 
 ```text
 LINE_USER_ID
@@ -290,7 +221,7 @@ FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 
 ---
 
-# 9. AIモデル
+# 10. AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
@@ -300,7 +231,7 @@ AI Model  → 現在モデル確認
 
 ---
 
-# 10. 現在の開発順
+# 11. 現在の開発順
 
 ```text
 Phase 4 — 主要実装済み・要実機確認
@@ -312,7 +243,7 @@ Phase 7
 
 ---
 
-# 11. セキュリティ
+# 12. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
