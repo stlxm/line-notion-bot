@@ -22,143 +22,161 @@ def _postback_button(label, data, style="primary", display_text=None):
     }
 
 
-def _section(title, description, buttons, color):
-    contents = [
-        {"type": "separator", "margin": "lg"},
-        {"type": "text", "text": title, "weight": "bold", "size": "md", "color": color, "margin": "lg", "wrap": True},
-        {"type": "text", "text": description, "size": "xs", "color": "#888888", "margin": "xs", "wrap": True},
-    ]
-    contents.extend(buttons)
-    return contents
+def _bubble(title, description, buttons, icon=""):
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": f"{icon} {title}".strip(), "weight": "bold", "size": "xl", "wrap": True},
+                {"type": "text", "text": description, "size": "sm", "color": "#777777", "margin": "xs", "wrap": True},
+            ],
+        },
+        "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": buttons},
+    }
 
 
 def create_main_menu_flex():
-    body = [{
-        "type": "text",
-        "text": "使いたい機能を選んでください。迷ったら「目的から探す」か「この機能ある？」を使えます。",
-        "size": "sm", "color": "#666666", "wrap": True,
-    }]
+    bubbles = [
+        _bubble(
+            "案内・入口",
+            "迷ったとき、機能を探したいとき",
+            [
+                _message_button("目的から探す", "？"),
+                _message_button("この機能ある？", "機能確認"),
+                _message_button("今のおすすめ", "おすすめ"),
+                _message_button("全コマンド一覧", "コマンド"),
+                _message_button("Notionを開く", "Notion", "secondary"),
+            ],
+            "✨",
+        ),
+        _bubble(
+            "家計簿・入力",
+            "支出入力と今日・今月の確認",
+            [
+                _postback_button("支出を入力", "action=quick_input_kakeibo"),
+                _message_button("自然文で支出入力", "自然文入力"),
+                _message_button("よく使う支出", "支出テンプレート"),
+                _message_button("本日のレポート", "本日のレポート"),
+                _message_button("今月の状況", "今月"),
+            ],
+            "🧾",
+        ),
+        _bubble(
+            "予算・分析",
+            "予算、使いすぎ、将来予測",
+            [
+                _message_button("予算一覧", "予算一覧"),
+                _message_button("予算を設定", "予算設定"),
+                _message_button("今日使える額", "今日使える"),
+                _message_button("支出ペース", "ペース"),
+                _message_button("予算提案", "予算提案"),
+                _message_button("異常支出", "異常支出"),
+                _message_button("年間支出予測", "年間予測"),
+                _message_button("週次レポート", "週次レポート"),
+            ],
+            "📊",
+        ),
+        _bubble(
+            "月次・固定費・貯金",
+            "月次処理と定期支出、目標管理",
+            [
+                _message_button("月締め", "月締め"),
+                _message_button("月次レビュー", "月次レビュー"),
+                _message_button("固定費一覧", "固定費一覧"),
+                _postback_button("固定費を追加", "action=quick_input_fixed"),
+                _message_button("固定費を今月登録", "固定費"),
+                _message_button("貯金目標", "貯金目標"),
+                _postback_button("貯金目標を追加", "action=quick_input_savings"),
+                _postback_button("貯金額を更新", "action=quick_update_savings"),
+            ],
+            "🎯",
+        ),
+        _bubble(
+            "修正・取り消し",
+            "直前の家計簿を安全に直す",
+            [
+                _message_button("直前登録を確認", "直前登録"),
+                _message_button("直前登録を修正", "直前修正"),
+                _message_button("直前登録を取り消す", "直前取り消し", "secondary"),
+            ],
+            "✏️",
+        ),
+        _bubble(
+            "カード",
+            "カード利用の未処理と自動分類",
+            [
+                _message_button("カード未処理", "カード未処理"),
+                _message_button("自動登録ルール", "カード自動登録"),
+                _message_button("カードテスト", "カードテスト", "secondary"),
+            ],
+            "💳",
+        ),
+        _bubble(
+            "貸し借り",
+            "貸した・借りた・精算を管理",
+            [
+                _postback_button("貸した記録を追加", "action=quick_input_lent"),
+                _postback_button("借りた記録を追加", "action=quick_input_borrowed"),
+                _message_button("貸し借り一覧", "貸し借り一覧"),
+                _postback_button("精算する", "action=quick_input_settle"),
+            ],
+            "💸",
+        ),
+        _bubble(
+            "メモ・買い物",
+            "期限付きメモと買い物リスト",
+            [
+                _postback_button("メモを追加", "action=quick_input_memo"),
+                _message_button("メモ一覧", "メモ一覧"),
+                _message_button("メモを削除", "メモ削除", "secondary"),
+                _postback_button("買い物を追加", "action=quick_input_shopping"),
+                _message_button("買い物リスト", "買い物リスト"),
+                _postback_button("購入済みにする", "action=quick_complete_shopping", "secondary"),
+            ],
+            "📝",
+        ),
+        _bubble(
+            "特売・あとで見る",
+            "今日の特売とURL保存",
+            [
+                _message_button("今日の特売", "特売情報"),
+                _postback_button("URLを保存", "action=quick_input_url"),
+            ],
+            "🛒",
+        ),
+        _bubble(
+            "AI",
+            "検索・モデル・評価・改善",
+            [
+                _message_button("AI検索の使い方", "AI"),
+                _message_button("AI Lite", "AI Lite"),
+                _message_button("AI Flash", "AI Flash"),
+                _message_button("現在のAIモデル", "AI Model"),
+                _message_button("👍 直前回答を評価", "AI評価 👍"),
+                _message_button("👎 直前回答を評価", "AI評価 👎", "secondary"),
+                _message_button("直前回答を改善", "AI改善", "secondary"),
+                _message_button("DBヘルスチェック", "DBヘルスチェック"),
+            ],
+            "🤖",
+        ),
+        _bubble(
+            "Notion・データ",
+            "汎用Notion操作",
+            [
+                _message_button("データを追加", "データ追加"),
+                _message_button("Notionを開く", "Notion"),
+                _message_button("機能確認", "機能確認"),
+                _message_button("全コマンド一覧", "コマンド"),
+            ],
+            "🗂",
+        ),
+    ]
 
-    body += _section(
-        "✨ 迷ったら",
-        "目的から探す・機能の有無を確認する・今やることを見る",
-        [
-            _message_button("目的から探す", "？"),
-            _message_button("この機能ある？", "機能確認"),
-            _message_button("今のおすすめ", "おすすめ"),
-            _message_button("全コマンド一覧", "コマンド", "secondary"),
-        ],
-        "#1DB446",
-    )
-
-    body += _section(
-        "📊 家計簿・予算",
-        "記録、今日/今月の状況、予算判断、レポート",
-        [
-            _message_button("本日のレポート", "本日のレポート"),
-            _message_button("今月のダッシュボード", "今月"),
-            _postback_button("支出を入力する", "action=quick_input_kakeibo", display_text="▶ 支出を入力する"),
-            _message_button("自然文で支出入力", "自然文入力"),
-            _message_button("よく使う支出", "支出テンプレート"),
-            _message_button("家計判断メニュー", "家計判断"),
-            _message_button("今日使える額", "今日使える"),
-            _message_button("支出ペースを見る", "ペース"),
-            _message_button("月次レビュー", "月次レビュー"),
-            _message_button("予算一覧を見る", "予算一覧"),
-            _message_button("週次レポートを見る", "週次レポート"),
-            _message_button("固定費一覧を見る", "固定費一覧"),
-        ],
-        "#1DB446",
-    )
-
-    body += _section(
-        "🛒 特売・買い物",
-        "今日の特売と買い物リストをまとめて確認",
-        [
-            _message_button("今日の特売を見る", "特売情報"),
-            _message_button("買い物リストを見る", "買い物リスト"),
-            _message_button("買い物を追加する", "Phase4", "secondary"),
-        ],
-        "#E67E22",
-    )
-
-    body += _section(
-        "✏️ 修正・取り消し",
-        "直前に登録した家計簿を確認して、安全に修正・取り消しできます",
-        [
-            _message_button("直前登録を確認・修正", "直前登録"),
-            _message_button("直前登録を取り消す", "直前取り消し", "secondary"),
-        ],
-        "#D97706",
-    )
-
-    body += _section(
-        "💸 貸し借り",
-        "貸した・借りた記録と未精算の確認",
-        [
-            _message_button("貸し借り一覧", "貸し借り一覧"),
-            _message_button("貸し借りの使い方", "機能確認 貸し借り", "secondary"),
-        ],
-        "#00897B",
-    )
-
-    body += _section(
-        "💳 カード",
-        "未処理、同じ店のまとめ処理、学習・自動登録",
-        [
-            _message_button("カード未処理を確認", "カード未処理"),
-            _message_button("自動分類ルールを見る", "カード自動登録"),
-        ],
-        "#1DB446",
-    )
-
-    body += _section(
-        "📝 メモ・あとで見る",
-        "期限付きメモ、自動分類、買い物、URL保存",
-        [
-            _postback_button("メモを追加する", "action=quick_input_memo", display_text="▶ メモを追加する"),
-            _message_button("メモ一覧を見る", "メモ一覧"),
-            _message_button("Phase 4の使い方", "Phase4"),
-            _message_button("メモを削除する", "メモ削除", "secondary"),
-        ],
-        "#0288D1",
-    )
-
-    body += _section(
-        "🤖 AI検索・改善",
-        "回答の参照DB・根拠・評価・Notion DBヘルスを確認",
-        [
-            _message_button("AI検索の使い方", "AI"),
-            _message_button("👍 直前AI回答を評価", "AI評価 👍"),
-            _message_button("👎 直前AI回答を評価", "AI評価 👎", "secondary"),
-            _message_button("Phase 5の使い方", "Phase5"),
-            _message_button("DBヘルスチェック", "DBヘルスチェック"),
-            _message_button("AIモデルを確認", "AI Model"),
-            _message_button("直前のAI回答を改善", "AI改善", "secondary"),
-        ],
-        "#F57C00",
-    )
-
-    body += _section(
-        "🗂 Notion・その他",
-        "貯金目標、汎用データ登録、Notion",
-        [
-            _message_button("貯金目標を見る", "貯金目標"),
-            _message_button("データを追加する", "データ追加"),
-            _message_button("Notionを開く", "Notion"),
-        ],
-        "#7B1FA2",
-    )
-
-    flex_json = {
-        "type": "bubble", "size": "mega",
-        "header": {"type": "box", "layout": "vertical", "contents": [
-            {"type": "text", "text": "🏠 LINE Notion Bot", "weight": "bold", "size": "xl", "wrap": True},
-            {"type": "text", "text": "機能一覧", "size": "sm", "color": "#888888", "margin": "xs"},
-        ]},
-        "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": body},
-    }
+    flex_json = {"type": "carousel", "contents": bubbles}
     return FlexMessage(
-        alt_text="LINE Notion Bot 機能一覧",
+        alt_text="LINE Notion Bot 全機能メニュー",
         contents=FlexContainer.from_json(json.dumps(flex_json, ensure_ascii=False)),
     )
