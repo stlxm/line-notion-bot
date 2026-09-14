@@ -1,5 +1,9 @@
+import inspect
 import json
-from linebot.v3.messaging import FlexMessage, FlexContainer
+from linebot.v3.messaging import FlexMessage, FlexContainer, TextMessage
+
+
+MENU_ALIASES = {"メニュー", "機能", "機能一覧", "menu", "Menu"}
 
 
 def _message_button(label, text, style="primary"):
@@ -38,7 +42,25 @@ def _bubble(title, description, buttons, icon=""):
     }
 
 
+def _called_from_unknown_fallback():
+    """app.pyの既存フォールバックから呼ばれた場合だけメニューを展開しない。"""
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back.f_back if frame and frame.f_back else None
+        if not caller or caller.f_code.co_name != "handle_message":
+            return False
+        user_message = str(caller.f_locals.get("user_message") or "").strip()
+        return bool(user_message) and user_message not in MENU_ALIASES
+    finally:
+        del frame
+
+
 def create_main_menu_flex():
+    # app.pyの未認識コマンド末尾は従来この関数を自動表示していた。
+    # その経路だけ選択画面を出さず、短い案内にする。
+    if _called_from_unknown_fallback():
+        return TextMessage(text="「ヘルプ」か「メニュー」と送ってください。")
+
     bubbles = [
         _bubble(
             "案内・入口",
@@ -86,11 +108,11 @@ def create_main_menu_flex():
                 _message_button("月締め", "月締め"),
                 _message_button("月次レビュー", "月次レビュー"),
                 _message_button("固定費一覧", "固定費一覧"),
-                _postback_button("固定費を追加", "action=quick_input_fixed"),
+                _message_button("固定費を追加", "固定費追加"),
                 _message_button("固定費を今月登録", "固定費"),
                 _message_button("貯金目標", "貯金目標"),
-                _postback_button("貯金目標を追加", "action=quick_input_savings"),
-                _postback_button("貯金額を更新", "action=quick_update_savings"),
+                _message_button("貯金目標を追加", "貯金目標追加"),
+                _message_button("貯金額を更新", "貯金更新"),
             ],
             "🎯",
         ),
@@ -118,10 +140,10 @@ def create_main_menu_flex():
             "貸し借り",
             "貸した・借りた・精算を管理",
             [
-                _postback_button("貸した記録を追加", "action=quick_input_lent"),
-                _postback_button("借りた記録を追加", "action=quick_input_borrowed"),
+                _message_button("貸した記録を追加", "貸した"),
+                _message_button("借りた記録を追加", "借りた"),
                 _message_button("貸し借り一覧", "貸し借り一覧"),
-                _postback_button("精算する", "action=quick_input_settle"),
+                _message_button("精算する", "精算"),
             ],
             "💸",
         ),
@@ -132,9 +154,9 @@ def create_main_menu_flex():
                 _postback_button("メモを追加", "action=quick_input_memo"),
                 _message_button("メモ一覧", "メモ一覧"),
                 _message_button("メモを削除", "メモ削除", "secondary"),
-                _postback_button("買い物を追加", "action=quick_input_shopping"),
+                _message_button("買い物を追加", "買い物"),
                 _message_button("買い物リスト", "買い物リスト"),
-                _postback_button("購入済みにする", "action=quick_complete_shopping", "secondary"),
+                _message_button("購入済みにする", "買った", "secondary"),
             ],
             "📝",
         ),
@@ -143,7 +165,7 @@ def create_main_menu_flex():
             "今日の特売とURL保存",
             [
                 _message_button("今日の特売", "特売情報"),
-                _postback_button("URLを保存", "action=quick_input_url"),
+                _message_button("URLを保存", "URL保存"),
             ],
             "🛒",
         ),
