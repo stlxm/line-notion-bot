@@ -7,7 +7,15 @@ import requests
 
 JST = timezone(timedelta(hours=9), "JST")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
-NOTION_FLYER_DATABASE_ID = os.environ.get("NOTION_FLYER_DATABASE_ID", "").strip()
+ACTIVE_LIFE_CALENDAR_DATABASE_ID = "684f959e451047389505a95ed368a7d6"
+DELETED_OLD_FLYER_DATABASE_ID = "3d90efb323d080b5999bed1820a6665e"
+_configured_flyer_db = os.environ.get("NOTION_FLYER_DATABASE_ID", "").strip()
+# 3d90... は削除済みの旧「特売カレンダー」。誤設定が残っていても実運用中の生活カレンダーへ退避する。
+NOTION_FLYER_DATABASE_ID = (
+    ACTIVE_LIFE_CALENDAR_DATABASE_ID
+    if not _configured_flyer_db or _configured_flyer_db == DELETED_OLD_FLYER_DATABASE_ID
+    else _configured_flyer_db
+)
 STORE_NAME = "サミット ミナノ分倍河原店"
 OFFICIAL_URL = "https://www.summitstore.co.jp/store/tokyo/post/?id=151#flyer"
 MAX_RESULTS = 20
@@ -34,6 +42,11 @@ def _select(prop):
 def _query_all():
     if not NOTION_API_KEY or not NOTION_FLYER_DATABASE_ID:
         return []
+    if _configured_flyer_db == DELETED_OLD_FLYER_DATABASE_ID:
+        print(
+            "NOTION_FLYER_DATABASE_ID に削除済み旧DBが設定されています。"
+            f"生活カレンダー {ACTIVE_LIFE_CALENDAR_DATABASE_ID} を使用します。"
+        )
     url = f"https://api.notion.com/v1/databases/{NOTION_FLYER_DATABASE_ID}/query"
     results = []
     cursor = None
@@ -140,8 +153,6 @@ def build_today_deals_text():
     today = datetime.now(JST).date().isoformat()
     if not NOTION_API_KEY:
         return "特売情報を取得できません。Renderの NOTION_API_KEY を確認してください。"
-    if not NOTION_FLYER_DATABASE_ID:
-        return "特売情報を取得できません。Renderの NOTION_FLYER_DATABASE_ID を設定してください。"
     deals = get_today_deals()
     lines = [f"🛒 {STORE_NAME}", f"【{today} の特売】", ""]
     if not deals:
