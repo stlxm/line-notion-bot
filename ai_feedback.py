@@ -1,12 +1,14 @@
 import os
 import re
 import time
+import threading
 import requests
 from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_AI_FEEDBACK_DATABASE_ID = os.environ.get("NOTION_AI_FEEDBACK_DATABASE_ID", "")
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 JST = timezone(timedelta(hours=9), "JST")
 
 _recent_interactions = {}
@@ -22,6 +24,87 @@ def _headers():
     }
 
 
+def _push_ai_rating_buttons(user_id):
+    """AI回答の直後に、LINE上で押せる 👍 / 👎 ボタンをPushする。"""
+    if not user_id or not LINE_CHANNEL_ACCESS_TOKEN:
+        return
+    payload = {
+        "to": user_id,
+        "messages": [
+            {
+                "type": "flex",
+                "altText": "AI回答を評価",
+                "contents": {
+                    "type": "bubble",
+                    "size": "kilo",
+                    "body": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "spacing": "sm",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "この回答は役に立ちましたか？",
+                                "weight": "bold",
+                                "size": "sm",
+                                "wrap": True,
+                            },
+                            {
+                                "type": "box",
+                                "layout": "horizontal",
+                                "spacing": "sm",
+                                "contents": [
+                                    {
+                                        "type": "button",
+                                        "style": "primary",
+                                        "height": "sm",
+                                        "action": {
+                                            "type": "message",
+                                            "label": "👍 良い",
+                                            "text": "AI評価 👍",
+                                        },
+                                    },
+                                    {
+                                        "type": "button",
+                                        "style": "secondary",
+                                        "height": "sm",
+                                        "action": {
+                                            "type": "message",
+                                            "label": "👎 改善したい",
+                                            "text": "AI評価 👎",
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                },
+            }
+        ],
+    }
+    try:
+        response = requests.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers={
+                "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=10,
+        )
+        if response.status_code >= 300:
+            print(f"AI rating button push error ({response.status_code}): {response.text[:500]}")
+    except Exception as e:
+        print(f"AI rating button push exception: {e}")
+
+
+def _schedule_ai_rating_buttons(user_id):
+    # app.py がAI回答本文をPushした直後に表示されるよう、少しだけ遅らせる。
+    timer = threading.Timer(1.5, _push_ai_rating_buttons, args=(user_id,))
+    timer.daemon = True
+    timer.start()
+
+
 def remember_ai_interaction(user_id, question, answer):
     if not user_id or not question:
         return
@@ -30,6 +113,7 @@ def remember_ai_interaction(user_id, question, answer):
         "answer": (answer or "").strip(),
         "saved_at": time.time(),
     }
+    _schedule_ai_rating_buttons(user_id)
 
 
 def get_last_ai_interaction(user_id):
