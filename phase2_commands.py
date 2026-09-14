@@ -11,6 +11,7 @@ import flyer_command
 import loan_manager
 import phase3a
 import phase3b
+import phase5
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -74,7 +75,7 @@ def _update_goal_current(name, current):
 
 def build_phase2_help():
     return (
-        "【家計判断 / Phase 2〜3】\n"
+        "【家計判断 / Phase 2〜5】\n"
         "2A 日々の判断\n"
         "・今日使える\n"
         "・ペース\n"
@@ -95,12 +96,16 @@ def build_phase2_help():
         "・自然文家計簿入力 / 支出テンプレート\n\n"
         "3B 直前登録の修正\n"
         "・直前登録 / 直前修正 / 直前取り消し\n\n"
+        "4 メモ・URL\n"
+        "・期限付きメモ / 買い物リスト / URL保存\n\n"
+        "5 AI改善\n"
+        "・AI評価 👍 / 👎 / DBヘルスチェック\n\n"
         "目的から探すなら「？」、機能があるか聞くなら「機能確認 ○○」。"
     )
 
 
 def handle_text_command(text):
-    """Phase 2〜3・特売・貸し借り・機能案内の同期コマンドを処理。該当しない場合はNoneを返す。"""
+    """Phase 2〜5・特売・貸し借り・機能案内の同期コマンドを処理。該当しない場合はNoneを返す。"""
     message = (text or "").strip()
     lowered = message.lower()
 
@@ -111,6 +116,10 @@ def handle_text_command(text):
     phase3b_reply = phase3b.handle_text_command(message)
     if phase3b_reply is not None:
         return phase3b_reply
+
+    phase5_reply = phase5.handle_text_command(message)
+    if phase5_reply is not None:
+        return phase5_reply
 
     flyer_reply = flyer_command.handle_text_command(message)
     if flyer_reply is not None:
