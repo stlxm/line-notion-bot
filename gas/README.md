@@ -30,7 +30,7 @@ SCHEDULER_SECRET
 ```text
 GEMINI_API_KEY
 NOTION_API_KEY
-NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
+NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
 NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```
 
@@ -120,11 +120,15 @@ Apps Scriptプロジェクトのタイムゾーンは `Asia/Tokyo` にしてく�
 Shufoo店舗ID: 264241
 ```
 
-## ファイルの役割
-
 `FlyerLifeCalendar.gs` が取得・解析・Notion同期の本体です。
 
-`FlyerDeals.gs` はHTML/iframe/画像URL処理、Notion API共通関数、生活カレンダーから今日の特売取得、通知前重複整理、短期特売優先通知、LINE push共通処理を担当します。
+`FlyerDeals.gs` はHTML/iframe/画像URL処理、Notion API共通関数、今日の特売取得、通知前重複整理、短期特売優先通知、LINE push共通処理を担当します。
+
+実運用中の特売DBは次です。
+
+```text
+NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
+```
 
 ---
 
@@ -245,5 +249,6 @@ gas/FlyerLifeCalendar.gs
 - `displayText` が含まれているか確認
 
 チラシ異常:
+- Script Properties の `NOTION_FLYER_DATABASE_ID` が `3d90efb323d080b5999bed1820a6665e` か確認
 - まず `testSummitShufooDeliveryIds`
 - 必要時だけGemini解析テストを実行
