@@ -1,3 +1,4 @@
+import calendar
 import html
 import os
 import re
@@ -10,6 +11,8 @@ JST = timezone(timedelta(hours=9), "JST")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_MEMO_DATABASE_ID = os.environ.get("NOTION_MEMO_DATABASE_ID", "")
 NOTION_URL_DATABASE_ID = os.environ.get("NOTION_URL_DATABASE_ID", "")
+
+WEEKDAYS = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
 
 
 def _headers():
@@ -43,21 +46,85 @@ def _plain(prop):
     return "".join(x.get("plain_text", "") for x in (values or []))
 
 
+def _month_end(year, month):
+    return datetime(year, month, calendar.monthrange(year, month)[1]).date()
+
+
+def _weekday_date(today, weekday, mode="next"):
+    target = WEEKDAYS[weekday]
+    if mode == "next_week":
+        monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        return monday + timedelta(days=target)
+    if mode == "this_week":
+        monday = today - timedelta(days=today.weekday())
+        return monday + timedelta(days=target)
+    delta = (target - today.weekday()) % 7
+    return today + timedelta(days=delta)
+
+
 def _due_date(text):
+    """メモ本文に明示された自然な期限表現をJSTの日付へ変換する。
+
+    内容だけから勝手に期限を推測はしない。日付・曜日・相対表現がある時だけ期限を付ける。
+    """
     today = datetime.now(JST).date()
     value = str(text or "")
+
     if "明後日" in value:
         return (today + timedelta(days=2)).isoformat()
     if "明日" in value:
         return (today + timedelta(days=1)).isoformat()
     if "今日" in value or "本日" in value:
         return today.isoformat()
+
+    m = re.search(r"(\d+)\s*日後", value)
+    if m:
+        return (today + timedelta(days=int(m.group(1)))).isoformat()
+    m = re.search(r"(\d+)\s*週間後", value)
+    if m:
+        return (today + timedelta(weeks=int(m.group(1)))).isoformat()
+
+    if "来月末" in value or "来月中" in value:
+        year = today.year + (1 if today.month == 12 else 0)
+        month = 1 if today.month == 12 else today.month + 1
+        return _month_end(year, month).isoformat()
+    if "今月末" in value or "今月中" in value or re.search(r"(?<!来)月末", value):
+        return _month_end(today.year, today.month).isoformat()
+
+    if "来週中" in value:
+        monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        return (monday + timedelta(days=6)).isoformat()
+    if "今週中" in value or re.search(r"(?<!来)週末", value):
+        monday = today - timedelta(days=today.weekday())
+        return (monday + timedelta(days=6)).isoformat()
+
+    m = re.search(r"来週(?:の)?([月火水木金土日])曜(?:日)?", value)
+    if m:
+        return _weekday_date(today, m.group(1), "next_week").isoformat()
+    m = re.search(r"今週(?:の)?([月火水木金土日])曜(?:日)?", value)
+    if m:
+        return _weekday_date(today, m.group(1), "this_week").isoformat()
+    m = re.search(r"(?:次の)?([月火水木金土日])曜(?:日)?(?:まで(?:に)?|迄(?:に)?)?", value)
+    if m:
+        return _weekday_date(today, m.group(1), "next").isoformat()
+
     m = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?", value)
     if m:
         try:
             return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date().isoformat()
         except ValueError:
             pass
+
+    m = re.search(r"(?<!\d)(\d{1,2})月(\d{1,2})日", value)
+    if m:
+        try:
+            d = datetime(today.year, int(m.group(1)), int(m.group(2))).date()
+            if d < today - timedelta(days=30):
+                d = d.replace(year=today.year + 1)
+            return d.isoformat()
+        except ValueError:
+            pass
+
     m = re.search(r"(?<!\d)(\d{1,2})[/-](\d{1,2})", value)
     if m:
         try:
@@ -73,9 +140,18 @@ def _due_date(text):
 def _clean_due_words(text):
     value = str(text or "").strip()
     suffix = r"(?:まで(?:に)?|迄(?:に)?)?"
-    value = re.sub(rf"(?:今日|本日|明日|明後日){suffix}", "", value)
-    value = re.sub(rf"20\d{{2}}[-/年]\d{{1,2}}[-/月]\d{{1,2}}日?{suffix}", "", value)
-    value = re.sub(rf"(?<!\d)\d{{1,2}}[/-]\d{{1,2}}{suffix}", "", value)
+    patterns = [
+        rf"(?:今日|本日|明日|明後日){suffix}",
+        rf"\d+\s*(?:日後|週間後){suffix}",
+        rf"(?:今週中|来週中|週末|今月中|今月末|来月中|来月末|月末){suffix}",
+        rf"(?:今週|来週)(?:の)?[月火水木金土日]曜(?:日)?{suffix}",
+        rf"(?:次の)?[月火水木金土日]曜(?:日)?{suffix}",
+        rf"20\d{{2}}[-/年]\d{{1,2}}[-/月]\d{{1,2}}日?{suffix}",
+        rf"(?<!\d)\d{{1,2}}月\d{{1,2}}日{suffix}",
+        rf"(?<!\d)\d{{1,2}}[/-]\d{{1,2}}{suffix}",
+    ]
+    for pattern in patterns:
+        value = re.sub(pattern, "", value)
     value = re.sub(r"\s{2,}", " ", value)
     value = re.sub(r"を\s*に(?=[一-龠ぁ-んァ-ヶ])", "を", value)
     return value.strip(" 　、,")
@@ -128,6 +204,8 @@ def add_smart_memo(text, forced_category=None):
     lines = ["✅ メモを保存しました。", f"内容: {cleaned}", f"分類: {category}"]
     if due:
         lines.append(f"期限: {due}")
+    else:
+        lines.append("期限: なし")
     return "\n".join(lines)
 
 
@@ -259,7 +337,20 @@ def save_url(url):
 def handle_text_command(text):
     message = str(text or "").strip().replace("　", " ")
     if message.lower() in {"phase4", "フェーズ4"}:
-        return "【Phase 4】\n・メモ 住民票を明日までに提出\n・買い物 牛乳\n・買い物リスト\n・買った 牛乳\n・URLをそのまま送信 → タイトル/カテゴリ付き保存"
+        return (
+            "【Phase 4】\n"
+            "メモ本文の期限表現を自動で読み取ります。期限が書かれていなければ期限なしです。\n\n"
+            "例:\n"
+            "・メモ 住民票を明日までに提出\n"
+            "・メモ レポートを金曜までに出す\n"
+            "・メモ 更新手続きを3日後までに確認\n"
+            "・メモ 書類提出 9月20日まで\n"
+            "・メモ 課題を来週月曜までに終える\n"
+            "・買い物 牛乳\n"
+            "・買い物リスト\n"
+            "・買った 牛乳\n"
+            "・URLをそのまま送信 → タイトル/カテゴリ付き保存"
+        )
     if message.startswith("買い物 "):
         return add_smart_memo(message[4:].strip(), "買い物")
     if message in ["買い物リスト", "買物リスト", "買うもの"]:
