@@ -73,9 +73,11 @@ def create_main_menu_flex():
 
     body += _section(
         "🛒 特売・買い物",
-        "今日使えるサミットの確認済み特売をNotionから表示",
+        "今日の特売と買い物リストをまとめて確認",
         [
             _message_button("今日の特売を見る", "特売情報"),
+            _message_button("買い物リストを見る", "買い物リスト"),
+            _message_button("買い物を追加する", "Phase4", "secondary"),
         ],
         "#E67E22",
     )
@@ -111,11 +113,12 @@ def create_main_menu_flex():
     )
 
     body += _section(
-        "📝 メモ",
-        "追加、一覧、確認付き削除",
+        "📝 メモ・あとで見る",
+        "期限付きメモ、自動分類、買い物、URL保存",
         [
             _postback_button("メモを追加する", "action=quick_input_memo", display_text="▶ メモを追加する"),
             _message_button("メモ一覧を見る", "メモ一覧"),
+            _message_button("Phase 4の使い方", "Phase4"),
             _message_button("メモを削除する", "メモ削除", "secondary"),
         ],
         "#0288D1",
