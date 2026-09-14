@@ -174,6 +174,13 @@ def handle_text_command(text):
     if message in ["貸し借り", "貸し借り一覧", "貸借", "立替一覧"]:
         return build_overview_text()
 
+    if message == "貸した":
+        return "【貸した記録】\n貸した 相手 金額 [メモ]\n例: 貸した 田中 3000 ランチ代"
+    if message == "借りた":
+        return "【借りた記録】\n借りた 相手 金額 [メモ]\n例: 借りた 田中 2000"
+    if message == "精算":
+        return "【精算】\n精算 相手 金額\n例: 精算 田中 3000"
+
     for kind in ["貸した", "借りた"]:
         if message.startswith(kind + " "):
             parts = message.split()
