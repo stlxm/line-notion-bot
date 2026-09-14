@@ -8,6 +8,7 @@ import requests
 import ai_engine
 import notion_helper
 import phase4
+import phase5
 
 JST = timezone(timedelta(hours=9), "JST")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
@@ -34,6 +35,10 @@ FEATURES = [
     {"name": "メモ期限・自動分類", "status": "implemented", "aliases": ["メモ", "メモ保存", "メモ一覧", "todo", "やること", "メモ期限", "メモ分類"], "usage": "「メモ 住民票を明日までに提出」のように送ると、期限と分類を自動保存します。"},
     {"name": "買い物リスト", "status": "implemented", "aliases": ["買い物", "買うもの", "買い物メモ", "買い物リスト"], "usage": "「買い物 牛乳」で追加、「買い物リスト」で一覧、「買った 牛乳」で完了にできます。"},
     {"name": "URLタイトル取得・分類", "status": "implemented", "aliases": ["URL保存", "リンク保存", "URLタイトル", "URL分類", "後で見る"], "usage": "URLをそのまま送るとページタイトル・カテゴリ・ドメインを取得してNotionへ保存します。"},
+    {"name": "AI回答評価", "status": "implemented", "aliases": ["AI評価", "👍", "👎", "AIフィードバック"], "usage": "AI回答の後に「AI評価 👍」または「AI評価 👎」で評価を保存できます。👎の後は「AI改善」で具体的な修正を残せます。"},
+    {"name": "AI参照DB・根拠表示", "status": "implemented", "aliases": ["参照DB", "AI根拠", "根拠表示", "AIの根拠"], "usage": "AI回答の末尾に【参照DB】と【根拠】を自動表示します。"},
+    {"name": "AI改善DBルーター反映", "status": "implemented", "aliases": ["AI改善ルーター", "DBルーター", "AI改善反映"], "usage": "過去の👎/改善ログに残った参照DBを、似た質問の次回DB選択候補へ反映します。"},
+    {"name": "Notion DBヘルスチェック", "status": "implemented", "aliases": ["DBヘルス", "Notionヘルス", "DBチェック", "Notion DBチェック"], "usage": "「DBヘルスチェック」で環境変数・DBアクセス・必須プロパティをまとめて確認します。"},
     {"name": "予算提案", "status": "implemented", "aliases": ["予算おすすめ", "予算提案"], "usage": "「予算提案」で過去実績から目安を表示します。"},
     {"name": "月次レビュー", "status": "implemented", "aliases": ["月次レビュー", "月レビュー", "振り返り"], "usage": "「月次レビュー」または「月次レビュー 2026-08」。"},
     {"name": "サミット特売情報", "status": "implemented", "aliases": ["チラシ", "特売", "特売情報", "今日の特売", "サミット", "セール"], "usage": "LINEで「特売」「特売情報」「今日の特売」と送ると、生活カレンダーの今日の確認済み特売を最大20件表示します。日次通知も動作します。"},
@@ -49,7 +54,8 @@ CURRENT_CAPABILITIES = [
     "貯金目標", "週次レポート", "固定費・サブスク管理", "カード未処理分類・学習・自動登録",
     "貸した・借りた・未精算一覧・精算", "期限付きメモ・メモ自動分類・買い物リスト",
     "URLタイトル取得・URLカテゴリ分類・URL保存", "Notion任意DBへのデータ追加",
-    "サミット特売チラシ解析・生活カレンダー・今日の特売コマンド・LINE通知", "AI質問（Lite / Flash切替）",
+    "サミット特売チラシ解析・生活カレンダー・今日の特売コマンド・LINE通知",
+    "AI質問（Lite / Flash切替）・AI評価・参照DB表示・根拠表示・改善ログによるDBルーター補助・DBヘルスチェック",
     "目的ベースのヘルプ・おすすめ・コマンド一覧",
 ]
 
@@ -161,11 +167,15 @@ def handle_feature_question(text):
     if phase4_reply is not None:
         return phase4_reply
 
+    phase5_reply = phase5.handle_text_command(text)
+    if phase5_reply is not None:
+        return phase5_reply
+
     query = _extract_feature_query(text)
     if query is None:
         return None
     if not query:
-        return "確認したい機能名も一緒に送ってください。\n例: 機能確認 特売情報\n例: 機能確認 買い物リスト"
+        return "確認したい機能名も一緒に送ってください。\n例: 機能確認 買い物リスト\n例: 機能確認 DBヘルス"
     feature = _find_feature(query)
     if feature:
         if feature["status"] == "implemented":
