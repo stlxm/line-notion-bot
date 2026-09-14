@@ -85,11 +85,14 @@ NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
 
 ## 特売・生活カレンダーDB
 
-実運用中の `NOTION_FLYER_DATABASE_ID`:
+実運用中の `生活カレンダー` DB:
 
 ```text
-3d90efb323d080b5999bed1820a6665e
+Database ID: 684f959e451047389505a95ed368a7d6
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
+
+`3d90efb323d080b5999bed1820a6665e` は削除済みの旧 `特売カレンダー` です。Render/GASともこの旧IDを使わないでください。
 
 主項目:
 
@@ -139,10 +142,10 @@ CARD_AUTO_REGISTER_MIN_MATCHES
 特売コマンド用:
 
 ```text
-NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
 
-`flyer_command.py` は誤ったDBへフォールバックしないよう、`NOTION_FLYER_DATABASE_ID` が未設定なら明示的にエラーを返します。
+`flyer_command.py` は旧削除DB `3d90ef...` が環境変数に残っている場合でも、現在の生活カレンダーへ退避します。ただしRenderの環境変数自体も正しいIDへ直してください。
 
 GitHub更新後はRenderを最新版へ再デプロイしてください。
 
@@ -164,7 +167,7 @@ SCHEDULER_SECRET
 ```text
 GEMINI_API_KEY
 NOTION_API_KEY
-NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```
 
@@ -216,12 +219,14 @@ LINE:
 実機確認:
 
 ```text
-1. Renderを最新版へ再デプロイ
-2. Renderの NOTION_FLYER_DATABASE_ID が 3d90efb323d080b5999bed1820a6665e か確認
+1. Renderの NOTION_FLYER_DATABASE_ID を 684f959e451047389505a95ed368a7d6 に修正
+2. GitHub最新版をRenderへ再デプロイ
 3. LINEで「特売情報」
 4. メニュー → 🛒 特売・買い物 → 今日の特売を見る
 5. 「機能確認 特売情報」
 ```
+
+404 `object_not_found` が出る場合は、対象DBが `LINE bot Access` Integrationへ共有されているかも確認します。
 
 ---
 
