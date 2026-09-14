@@ -7,6 +7,7 @@ import requests
 
 import ai_engine
 import notion_helper
+import phase4
 
 JST = timezone(timedelta(hours=9), "JST")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
@@ -30,7 +31,9 @@ FEATURES = [
     {"name": "直前登録の修正・取り消し", "status": "implemented", "aliases": ["直前登録", "直前修正", "直前取り消し", "最後の支出修正", "家計簿修正"], "usage": "「直前登録」で最新家計簿を表示し、金額・店名・日付・ジャンル・支払方法を修正できます。"},
     {"name": "カード未処理整理", "status": "implemented", "aliases": ["カード未処理", "カード整理", "カード分類"], "usage": "「カード未処理」で未分類カードを順番に処理できます。"},
     {"name": "貸し借り管理", "status": "implemented", "aliases": ["貸した", "借りた", "貸し借り", "貸借", "立替", "立て替え", "貸し借り記録", "貸し借りの記録", "お金の貸し借り", "返済記録"], "usage": "「貸した 田中 3000 ランチ代」「借りた 田中 2000」「貸し借り一覧」「精算 田中 3000」が使えます。"},
-    {"name": "メモ", "status": "implemented", "aliases": ["メモ保存", "メモ一覧", "todo", "やること"], "usage": "「メモ 牛乳を買う」「メモ一覧」「メモ削除」が使えます。"},
+    {"name": "メモ期限・自動分類", "status": "implemented", "aliases": ["メモ", "メモ保存", "メモ一覧", "todo", "やること", "メモ期限", "メモ分類"], "usage": "「メモ 住民票を明日までに提出」のように送ると、期限と分類を自動保存します。"},
+    {"name": "買い物リスト", "status": "implemented", "aliases": ["買い物", "買うもの", "買い物メモ", "買い物リスト"], "usage": "「買い物 牛乳」で追加、「買い物リスト」で一覧、「買った 牛乳」で完了にできます。"},
+    {"name": "URLタイトル取得・分類", "status": "implemented", "aliases": ["URL保存", "リンク保存", "URLタイトル", "URL分類", "後で見る"], "usage": "URLをそのまま送るとページタイトル・カテゴリ・ドメインを取得してNotionへ保存します。"},
     {"name": "予算提案", "status": "implemented", "aliases": ["予算おすすめ", "予算提案"], "usage": "「予算提案」で過去実績から目安を表示します。"},
     {"name": "月次レビュー", "status": "implemented", "aliases": ["月次レビュー", "月レビュー", "振り返り"], "usage": "「月次レビュー」または「月次レビュー 2026-08」。"},
     {"name": "サミット特売情報", "status": "implemented", "aliases": ["チラシ", "特売", "特売情報", "今日の特売", "サミット", "セール"], "usage": "LINEで「特売」「特売情報」「今日の特売」と送ると、生活カレンダーの今日の確認済み特売を最大20件表示します。日次通知も動作します。"},
@@ -44,7 +47,8 @@ CURRENT_CAPABILITIES = [
     "直前登録の修正・取り消し", "全体予算・ジャンル予算設定", "毎月1日の予算設定案内", "今日使える額",
     "支出ペース判定", "異常支出検知", "予算提案", "月締め・月次AIレビュー", "年間支出予測",
     "貯金目標", "週次レポート", "固定費・サブスク管理", "カード未処理分類・学習・自動登録",
-    "貸した・借りた・未精算一覧・精算", "メモ保存・一覧・削除", "URL保存", "Notion任意DBへのデータ追加",
+    "貸した・借りた・未精算一覧・精算", "期限付きメモ・メモ自動分類・買い物リスト",
+    "URLタイトル取得・URLカテゴリ分類・URL保存", "Notion任意DBへのデータ追加",
     "サミット特売チラシ解析・生活カレンダー・今日の特売コマンド・LINE通知", "AI質問（Lite / Flash切替）",
     "目的ベースのヘルプ・おすすめ・コマンド一覧",
 ]
@@ -153,11 +157,15 @@ def _gemini_feature_judgement(query):
 
 
 def handle_feature_question(text):
+    phase4_reply = phase4.handle_text_command(text)
+    if phase4_reply is not None:
+        return phase4_reply
+
     query = _extract_feature_query(text)
     if query is None:
         return None
     if not query:
-        return "確認したい機能名も一緒に送ってください。\n例: 機能確認 特売情報\n例: 機能確認 貸し借り"
+        return "確認したい機能名も一緒に送ってください。\n例: 機能確認 特売情報\n例: 機能確認 買い物リスト"
     feature = _find_feature(query)
     if feature:
         if feature["status"] == "implemented":
