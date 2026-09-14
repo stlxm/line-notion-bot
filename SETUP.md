@@ -10,6 +10,7 @@
 - `PHASE1_TEST.md`: Phase 1実機テスト
 - `PHASE2_TEST.md`: Phase 2実機テスト
 - `PHASE3_TEST.md`: Phase 3A/3B実機テスト
+- `PHASE5_TEST.md`: Phase 4/5実機テスト
 - `FLYER_TEST.md`: サミットチラシ・生活カレンダー実機テスト
 - `gas/README.md`: GAS詳細
 
@@ -23,129 +24,71 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 
 ---
 
-# 2. 主要Notion DB
+# 2. Phase 4 / 5で使うNotion DB
 
-## 家計簿DB
+## メモDB
+
+```text
+Database ID: 3d60efb323d08089b369df4e332d7e36
+環境変数: NOTION_MEMO_DATABASE_ID
+```
+
+Phase 4で追加済み:
 
 | 名前 | 型 |
 |---|---|
-| `内容・店名` | Title |
-| `金額` | Number |
-| `日付` | Date |
-| `ジャンル` | Select |
-| `カード・支払方法` | Select |
-| `月別管理` | Relation |
+| `期限` | Date |
+| `分類` | Select (`買い物/やること/予定/アイデア/その他`) |
+| `完了` | Checkbox |
 
-環境変数: `NOTION_KAKEIBO_DATABASE_ID`
+## 後で見るURL DB
 
-## 月別管理DB
+```text
+Database ID: 3d40efb323d0806b927ce286e442add6
+環境変数: NOTION_URL_DATABASE_ID
+```
+
+Phase 4で追加済み:
 
 | 名前 | 型 |
 |---|---|
-| `年月` | Title |
-| `全体予算` | Number |
-| `食費予算`など | Number |
-| `締め済み` | Checkbox |
-| `締め日時` | Date |
-| `確定支出` | Number |
+| `ページタイトル` | Rich text |
+| `カテゴリ` | Select (`記事/買い物/動画/SNS/資料/その他`) |
+| `ドメイン` | Rich text |
+| `保存日時` | Date |
 
-環境変数: `NOTION_MONTHLY_DATABASE_ID`
-
-`予算 お菓子 3000` のように未作成ジャンルを設定した場合、Botが `お菓子予算` Number列を自動追加してから保存します。
-
-## メモDB — Phase 4
-
-Database ID:
+## AI改善ログ DB
 
 ```text
-3d60efb323d08089b369df4e332d7e36
+Database ID: 3d70efb323d0806faa10ed0ec36351cb
+環境変数: NOTION_AI_FEEDBACK_DATABASE_ID
 ```
 
-環境変数:
+既存:
 
 ```text
-NOTION_MEMO_DATABASE_ID
+質問 Title
+AI回答 Rich text
+期待する回答 Rich text
+登録日時 Date
 ```
 
-Phase 4実装に合わせ、既存DBへ次を追加済みです。
-
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `メモ` | Title | 内容 |
-| `日付` | Date | 登録日時 |
-| `期限` | Date | #50 メモ期限 |
-| `分類` | Select | 買い物 / やること / 予定 / アイデア / その他 |
-| `完了` | Checkbox | 買い物リスト等の完了状態 |
-
-## 後で見るURL DB — Phase 4
-
-Database ID:
+Phase 5で追加済み:
 
 ```text
-3d40efb323d0806b927ce286e442add6
+評価 Select: 👍 / 👎 / 改善
+参照DB Rich text
+根拠 Rich text
 ```
 
-環境変数:
-
-```text
-NOTION_URL_DATABASE_ID
-```
-
-既存の `URL` / `時間` に加えて次を追加済みです。
-
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `ページタイトル` | Rich text | #56 Webタイトル |
-| `カテゴリ` | Select | 記事 / 買い物 / 動画 / SNS / 資料 / その他 |
-| `ドメイン` | Rich text | URLのホスト名 |
-| `保存日時` | Date | 保存時刻 |
-
-URLのタイトル取得・カテゴリ分類は `phase4.py` がルールベースで行い、Geminiは使いません。
-
-## 固定費DB
-
-環境変数: `NOTION_FIXED_DATABASE_ID`
-
-## カード未処理DB
-
-環境変数: `NOTION_CARD_PENDING_DATABASE_ID`
-
-## カード学習ルールDB
-
-環境変数: `NOTION_CARD_RULES_DATABASE_ID`
-
-## 貯金目標DB
-
-環境変数: `NOTION_SAVINGS_GOALS_DATABASE_ID`
-
-## 貸し借り管理DB
-
-```text
-Database ID: f9b2c4eb59ea4c13b968f8d9b48663bc
-NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
-```
-
-## 機能追加要望DB
-
-```text
-Database ID: 76e4fe5d248e4fd1a48f45e9bdd59e8c
-NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
-```
-
-## 特売・生活カレンダーDB
+## 生活カレンダー
 
 ```text
 Database ID: 684f959e451047389505a95ed368a7d6
 NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
 
-`3d90efb323d080b5999bed1820a6665e` は削除済みの旧 `特売カレンダー` です。
-
-## チラシ一覧
-
-```text
-Database ID: fdd0c0ce50974273b9b88f5272858e90
-```
+旧 `3d90efb323d080b5999bed1820a6665e` は削除済みDBなので使用しません。
 
 ---
 
@@ -176,52 +119,137 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
-Phase 4で新しい環境変数は増えません。既存の `NOTION_MEMO_DATABASE_ID` と `NOTION_URL_DATABASE_ID` を使います。
+Phase 4/5で新しい環境変数は増えません。既存のIDを利用します。
 
 GitHub更新後はRenderを最新版へ再デプロイしてください。
 
 ---
 
-# 4. Phase 4 実機確認
+# 4. Phase 4
+
+実装ファイル:
 
 ```text
+phase4.py
+feature_guide.py
+menu.py
+```
+
+LINE:
+
+```text
+Phase4
 メモ 住民票を明日までに提出
 メモ一覧
 買い物 牛乳
-買い物 洗濯ネット
 買い物リスト
 買った 牛乳
 https://example.com/
-機能確認 買い物リスト
-機能確認 URL分類
 ```
 
-確認ポイント:
-
-```text
-・メモDBに期限 / 分類 / 完了が保存される
-・買い物リストは未完了の買い物だけ表示される
-・買った 商品名 で1件だけ一致した項目を完了にする
-・URL DBにページタイトル / カテゴリ / ドメイン / 保存日時が入る
-・URLタイトル取得失敗でもURL自体は保存できる
-```
+URL取得先がJavaScript必須・ログイン必須・Bot拒否の場合、タイトルを取得できないことがあります。その場合でもURL本体は保存する設計です。
 
 ---
 
-# 5. GAS Script Properties
+# 5. Phase 5
 
-共通:
+実装ファイル:
+
+```text
+phase5.py
+ai_engine.py
+ai_feedback.py
+feature_guide.py
+menu.py
+```
+
+## AI回答の参照DB・根拠
+
+```text
+AI 今月の食費を分析して
+```
+
+回答末尾に `【参照DB】` と `【根拠】` が付きます。参照DBは `notion_helper` が実際に選択して文脈化したDB名から生成します。
+
+## AI評価
+
+```text
+AI評価 👍
+AI評価 👎
+```
+
+メインメニューにもMessage actionの評価ボタンがあります。押した瞬間に評価コマンドがトークへ表示されます。
+
+`👎` の後に `AI改善` を使うと、既存の期待回答入力フローを利用できます。
+
+## AI改善 → DBルーター
+
+過去の類似 `👎 / 改善` ログに `参照DB` が保存されている場合、そのDB名を次回のルーティングクエリへ補助情報として加えます。過去ログの回答内容を事実として再利用するものではありません。
+
+## Notion DBヘルスチェック
+
+```text
+DBヘルスチェック
+Notion DBヘルスチェック
+```
+
+確認内容:
+
+```text
+・必要な環境変数が設定されているか
+・Notion APIからDBを取得できるか
+・Phase 4/5などで必要な主要プロパティが存在するか
+```
+
+環境変数の値やAPIキーそのものはLINEへ表示しません。
+
+---
+
+# 6. Phase 4 / 5 実機確認
+
+```text
+メニュー
+Phase4
+メモ 住民票を明日までに提出
+メモ一覧
+買い物 牛乳
+買い物リスト
+買った 牛乳
+https://example.com/
+Phase5
+DBヘルスチェック
+AI 今月の食費を分析して
+AI評価 👍
+AI評価 👎
+```
+
+`PHASE5_TEST.md` に詳細手順を記載します。
+
+---
+
+# 7. 特売
+
+```text
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
+```
+
+```text
+特売
+特売情報
+今日の特売
+```
+
+LINEコマンドは実機確認済みです。
+
+---
+
+# 8. GAS Script Properties
 
 ```text
 LINE_USER_ID
 LINE_CHANNEL_ACCESS_TOKEN
 RENDER_BASE_URL
 SCHEDULER_SECRET
-```
-
-チラシ用:
-
-```text
 GEMINI_API_KEY
 NOTION_API_KEY
 NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
@@ -234,62 +262,9 @@ NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-Apps Scriptタイムゾーン: `(GMT+09:00) Tokyo`
-
 ---
 
-# 6. 今日の特売コマンド
-
-```text
-特売
-特売情報
-今日の特売
-本日の特売
-サミット特売
-```
-
-取得元は実運用中の `生活カレンダー` DBです。404 `object_not_found` が出る場合は、DB IDと `LINE bot Access` Integration共有を確認します。
-
----
-
-# 7. Phase 3A / 3B
-
-```text
-自然文入力
-今日サミットで2380円使った
-支出テンプレート
-本日のレポート
-直前登録
-直前修正
-直前取り消し
-```
-
----
-
-# 8. 毎月1日の予算設定案内
-
-GAS:
-
-```text
-sendMonthlyBudgetNotice
-testMonthlyBudgetNotice
-installMonthlyBudgetNoticeTrigger
-```
-
----
-
-# 9. 貸し借り管理
-
-```text
-貸した 田中 3000 ランチ代
-借りた 田中 2000
-貸し借り一覧
-精算 田中 3000
-```
-
----
-
-# 10. AIモデル
+# 9. AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
@@ -299,34 +274,19 @@ AI Model  → 現在モデル確認
 
 ---
 
-# 11. GASトリガー
+# 10. 現在の開発順
 
 ```text
-checkCardEmails                         1時間ごと
-sendMonthlyBudgetNotice                 毎月1日6時台
-runDailySummitLifeCalendarAutomation    毎日6時台
-sendDailyMemoReminder                   毎日8時ごろ
-sendDailyBudgetAlert                    毎日20時ごろ
-sendDailyCardPendingReminder            毎日20〜21時ごろ
-sendMonthEndCardCheck                   毎日21時ごろ
-sendWeeklyFinanceReport                 毎週日曜20時ごろ
-```
-
----
-
-# 12. 開発順
-
-```text
-Phase 4 — 実装済み・要実機確認
-Phase 5 — 次に実装
-Phase 3C — Phase 5の後
+Phase 4 — 主要実装済み・要実機確認
+Phase 5 — 主要実装済み・要実機確認
+Phase 3C — 次
 Phase 6
 Phase 7
 ```
 
 ---
 
-# 13. セキュリティ
+# 11. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
