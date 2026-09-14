@@ -36,13 +36,7 @@ Notion IntegrationはBotが使うすべてのDBへ接続し、読み取り・作
 | `カード・支払方法` | Select |
 | `月別管理` | Relation |
 
-環境変数:
-
-```text
-NOTION_KAKEIBO_DATABASE_ID
-```
-
-Phase 3A/3Bとも既存の家計簿DBを使います。自然文入力や支出テンプレート専用DBは不要です。
+環境変数: `NOTION_KAKEIBO_DATABASE_ID`
 
 ## 月別管理DB
 
@@ -57,114 +51,63 @@ Phase 3A/3Bとも既存の家計簿DBを使います。自然文入力や支出�
 
 環境変数: `NOTION_MONTHLY_DATABASE_ID`
 
-`予算 お菓子 3000` のように、まだ `お菓子予算` プロパティが存在しないジャンルを設定した場合、Botが月別管理DBへNumber列を自動追加してから保存します。Notion IntegrationにDBスキーマ更新権限が必要です。
+`予算 お菓子 3000` のように未作成ジャンルを設定した場合、Botが `お菓子予算` Number列を自動追加してから保存します。
 
 ## 固定費DB
-
-`内容・店名` Title / `金額` Number / `ジャンル` Select / `カード・支払方法` Select / `有効` Checkbox
 
 環境変数: `NOTION_FIXED_DATABASE_ID`
 
 ## カード未処理DB
 
-`GmailMessageID` Title / `カード` Rich text / `利用先` Rich text / `金額` Number / `利用日` Date / `通知済み` Checkbox / `登録日時` Date
-
 環境変数: `NOTION_CARD_PENDING_DATABASE_ID`
 
 ## カード学習ルールDB
-
-`店名キー` Title / `表示名` Rich text / `ジャンル` Select / `学習回数` Number / `一致回数` Number / `自動登録` Checkbox / `最終更新` Date
 
 環境変数: `NOTION_CARD_RULES_DATABASE_ID`
 
 ## 貯金目標DB
 
-`目標名` Title / `目標額` Number / `現在額` Number / `期限` Date / `有効` Checkbox
-
 環境変数: `NOTION_SAVINGS_GOALS_DATABASE_ID`
 
 ## 貸し借り管理DB
 
-Database ID:
-
 ```text
-f9b2c4eb59ea4c13b968f8d9b48663bc
-```
-
-| 名前 | 型 |
-|---|---|
-| `相手` | Title |
-| `種類` | Select (`貸した/借りた`) |
-| `金額` | Number |
-| `日付` | Date |
-| `状態` | Select (`未精算/精算済み`) |
-| `精算日` | Date |
-| `メモ` | Rich text |
-
-環境変数:
-
-```text
+Database ID: f9b2c4eb59ea4c13b968f8d9b48663bc
 NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
 ```
 
 ## 機能追加要望DB
 
-Database ID:
-
 ```text
-76e4fe5d248e4fd1a48f45e9bdd59e8c
-```
-
-| 名前 | 型 |
-|---|---|
-| `要望` | Title |
-| `問い合わせ文` | Rich text |
-| `状態` | Select (`未確認/検討中/採用/見送り`) |
-| `登録日` | Date |
-| `回数` | Number |
-| `備考` | Rich text |
-
-環境変数:
-
-```text
+Database ID: 76e4fe5d248e4fd1a48f45e9bdd59e8c
 NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
 ```
 
----
-
-# 3. 生活カレンダー・チラシ一覧
-
 ## 生活カレンダー
 
-Database ID:
-
 ```text
-684f959e451047389505a95ed368a7d6
+Database ID: 684f959e451047389505a95ed368a7d6
 ```
 
 主項目:
 
-| 名前 | 型 | 用途 |
-|---|---|---|
-| `予定名` | Title | 表示名 |
-| `日付` | Date | 単日または期間 |
-| `種類` | Select | 特売/家計/引き落とし/給料/メモ/予定/その他 |
-| `金額` | Number | 金額を持つ予定用 |
-| `内容` | Rich text | 補足説明 |
-| `有効` | Checkbox | カレンダー表示対象 |
-| `更新日時` | Date | 最終同期 |
+```text
+予定名 / 日付 / 種類 / 金額 / 内容 / 価格 / 容量・単位 / 店舗 / 備考
+優先度 / チラシURL / チラシ識別 / 識別キー / 元チラシID / 元チラシ名
+元画像URL / 確認状態 / 有効 / 更新日時
+```
+
+LINEの `特売情報` コマンドはこのDBを読みます。
 
 ## チラシ一覧
 
-Database ID:
-
 ```text
-fdd0c0ce50974273b9b88f5272858e90
+Database ID: fdd0c0ce50974273b9b88f5272858e90
 ```
 
 ---
 
-# 4. Render環境変数
+# 3. Render環境変数
 
 ```text
 LINE_CHANNEL_ACCESS_TOKEN
@@ -183,6 +126,7 @@ NOTION_CARD_RULES_DATABASE_ID
 NOTION_SAVINGS_GOALS_DATABASE_ID
 NOTION_LOAN_DATABASE_ID
 NOTION_FEATURE_REQUEST_DATABASE_ID
+NOTION_FLYER_DATABASE_ID
 NOTION_DATABASE_IDS
 GEMINI_API_KEY
 GEMINI_MODEL
@@ -190,20 +134,19 @@ SCHEDULER_SECRET
 CARD_AUTO_REGISTER_MIN_MATCHES
 ```
 
-貸し借り・要望DB:
+特売コマンド用:
 
 ```text
-NOTION_LOAN_DATABASE_ID=f9b2c4eb59ea4c13b968f8d9b48663bc
-NOTION_FEATURE_REQUEST_DATABASE_ID=76e4fe5d248e4fd1a48f45e9bdd59e8c
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
 
-Phase 3A、本日のレポート、ジャンル予算修正に新しい環境変数は不要です。
+`flyer_command.py` はこの値が未設定でも現在の生活カレンダーDB IDを既定値として使います。ただし、DBを将来作り直した場合に備えてRenderへ設定しておく方が安全です。
 
 GitHub更新後はRenderを最新版へ再デプロイしてください。
 
 ---
 
-# 5. GAS Script Properties
+# 4. GAS Script Properties
 
 共通:
 
@@ -229,30 +172,59 @@ NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-Apps Scriptタイムゾーン:
-
-```text
-(GMT+09:00) Tokyo
-```
+Apps Scriptタイムゾーン: `(GMT+09:00) Tokyo`
 
 秘密値は `.gs` ファイルへ直書きせずScript Propertiesへ保存します。
 
 ---
 
-# 6. Phase 3A — 自然文家計簿入力
+# 5. 今日の特売コマンド
 
 実装ファイル:
 
 ```text
-phase3a.py
+flyer_command.py
 phase2_commands.py
 menu.py
 feature_guide.py
 ```
 
-追加DBは不要です。既存の家計簿DBの `ジャンル` と `カード・支払方法` のSelect候補をそのまま使います。
+LINE:
 
-LINE例:
+```text
+特売
+特売情報
+今日の特売
+本日の特売
+サミット特売
+```
+
+取得条件:
+
+```text
+店舗 = サミット ミナノ分倍河原店
+種類 = 特売
+確認状態 = 確認済み
+有効 = true
+日付が今日を含む
+```
+
+短期特売を先に表示し、月間・長期特売を後に表示します。最大20件です。
+
+新しいDBやGASトリガーは不要です。既存の生活カレンダーをRenderから直接読みます。
+
+実機確認:
+
+```text
+1. Renderを最新版へ再デプロイ
+2. LINEで「特売情報」
+3. メニュー → 🛒 特売・買い物 → 今日の特売を見る
+4. 「機能確認 特売情報」
+```
+
+---
+
+# 6. Phase 3A — 自然文家計簿入力
 
 ```text
 自然文入力
@@ -260,29 +232,21 @@ LINE例:
 昨日コンビニで540円買った
 ```
 
-自然文から金額・店名・日付を読み取ります。ジャンルや支払方法が文章に含まれていない場合は、現在のNotion Select候補からボタンを表示します。最終確認前には保存しません。
-
-自然文の途中データはRenderメモリ上だけに短時間保持します。Render再起動時に消えても、未保存の確認前データだけが失われるため、Notionの既存データは壊れません。
+追加DBは不要です。既存の家計簿DBのSelect候補を使います。最終確認前には保存しません。
 
 ---
 
-# 7. Phase 3A — よく使う支出テンプレート
-
-LINE:
+# 7. よく使う支出テンプレート
 
 ```text
 支出テンプレート
 ```
 
-直近90日の家計簿を読み、`店名 + ジャンル + 支払方法` の組み合わせを頻度順に候補化します。テンプレート金額にはその組み合わせの中央値を使います。
-
-専用DBや新しい環境変数は不要です。
+直近90日の家計簿から `店名 + ジャンル + 支払方法` を集計し、頻度順に候補を表示します。
 
 ---
 
 # 8. 本日のレポート
-
-LINE:
 
 ```text
 本日のレポート
@@ -290,47 +254,31 @@ LINE:
 日次レポート
 ```
 
-既存の家計簿DB・月別管理DB・カード未処理DBを読み、今日の支出、ジャンル内訳、最大支出、今月累計、残り予算、1日目安、カード未処理件数を表示します。
-
-現時点ではLINEから手動表示する機能です。自動定時Pushはまだ設定していません。
+今日の支出、ジャンル内訳、最大支出、今月累計、残り予算、1日目安、カード未処理件数を表示します。
 
 ---
 
-# 9. ジャンル別予算
-
-次の形式を使えます。
+# 9. Phase 3B — 直前登録の修正・取り消し
 
 ```text
-予算 100000
-予算 お菓子 3000
-予算 2026-10 食費 35000
+直前登録
+直前修正
+直前取り消し
 ```
 
-`○○予算` 列が月別管理DBにない場合は自動作成します。失敗する場合は、Notion Integrationが月別管理DBに接続され、DBプロパティを更新できる権限があるか確認してください。
+取り消しは `archived=true` を使い、物理削除しません。
 
 ---
 
 # 10. 毎月1日の予算設定案内
 
-実装ファイル:
+GAS:
 
 ```text
-gas/FinanceReports.gs
-```
-
-手動テスト:
-
-```text
+sendMonthlyBudgetNotice
 testMonthlyBudgetNotice
-```
-
-トリガー作成:
-
-```text
 installMonthlyBudgetNoticeTrigger
 ```
-
-`設定する` / `後でする` のPostbackには `displayText` があり、タップ直後にトークへ選択内容が表示されます。
 
 ---
 
@@ -343,63 +291,21 @@ installMonthlyBudgetNoticeTrigger
 精算 田中 3000
 ```
 
-`精算 相手 金額` は未精算レコードが1件だけ一致した場合のみ更新します。
-
 ---
 
-# 12. 機能確認・Gemini補助判定・機能追加要望
+# 12. 機能確認
 
 ```text
+機能確認 特売情報
 機能確認 貸し借り
 機能確認 自然文家計簿
-機能確認 本日のレポート
 ```
 
-登録済み機能で見つからない場合だけGeminiを使います。Geminiも未対応と判断した場合に限り、入力した機能名をそのまま要望DBへ登録します。
+登録済み機能で見つからない場合だけGeminiを使います。
 
 ---
 
-# 13. Phase 3B — 直前登録の修正・取り消し
-
-追加設定・追加DBは不要です。既存の家計簿DBと `NOTION_KAKEIBO_DATABASE_ID` を使います。
-
-LINE:
-
-```text
-直前登録
-直前修正
-直前取り消し
-```
-
-修正例:
-
-```text
-直前修正 金額 1500
-直前修正 店名 サミット
-直前修正 日付 2026-09-12
-直前修正 ジャンル 食費
-直前修正 支払方法 JCB
-```
-
-取り消しは `archived=true` を使い、物理削除しません。
-
----
-
-# 14. ボタンの即時タップ表示
-
-LINE Postbackは `displayText`、Phase 3Aの選択は `message` action を使っています。
-
-期待動作:
-
-```text
-ボタンを押す
-→ トーク画面へ選択内容が即時表示
-→ 数秒後にBotの処理結果が返る
-```
-
----
-
-# 15. Gemini AIモデル
+# 13. AIモデル
 
 ```text
 AI Lite   → gemini-3.5-flash-lite
@@ -407,64 +313,36 @@ AI Flash  → gemini-3.6-flash
 AI Model  → 現在モデル確認
 ```
 
-Phase 3Aの通常の自然文家計簿解析はルールベースで、Geminiを使用しません。
-
 ---
 
-# 16. サミットチラシ
-
-状態: **実装完了・実機確認済み・日次運用中**
+# 14. GASトリガー
 
 ```text
-detected=5
-analyzed=5
-missing=[]
-flyers=5
-deals=57
-```
-
-GAS:
-
-```text
-gas/FlyerDeals.gs
-gas/FlyerLifeCalendar.gs
+checkCardEmails                         1時間ごと
+sendMonthlyBudgetNotice                 毎月1日6時台
+runDailySummitLifeCalendarAutomation    毎日6時台
+sendDailyMemoReminder                   毎日8時ごろ
+sendDailyBudgetAlert                    毎日20時ごろ
+sendDailyCardPendingReminder            毎日20〜21時ごろ
+sendMonthEndCardCheck                   毎日21時ごろ
+sendWeeklyFinanceReport                 毎週日曜20時ごろ
 ```
 
 ---
 
-# 17. GASトリガー
-
-| 関数 | 推奨 |
-|---|---|
-| `checkCardEmails` | 1時間ごと |
-| `sendMonthlyBudgetNotice` | 毎月1日6時台 |
-| `runDailySummitLifeCalendarAutomation` | 毎日6時台 |
-| `sendDailyMemoReminder` | 毎日朝8時 |
-| `sendDailyCardPendingReminder` | 毎日20〜21時 |
-| `sendMonthEndCardCheck` | 毎日21時 |
-| `sendDailyBudgetAlert` | 毎日20時 |
-| `sendWeeklyFinanceReport` | 毎週日曜20時 |
-
----
-
-# 18. 開発ロードマップ
-
-レシート系はユーザー判断で正式対象から削除済みです。
+# 15. 開発ロードマップ
 
 ```text
-削除: #32 レシート入力
-削除: #33 複数品目レシート分類
-
-Phase 3A: #34 自然文家計簿入力 / #36 よく使う支出テンプレート（実装済み・要実機確認）
-Phase 3B: #37 直前登録取り消し / #38 直前登録修正（実装済み・要実機確認）
-Phase 3C: #39 / #40 / #45 / #46
+Phase 3A: #34 / #36 実装済み・要実機確認
+Phase 3B: #37 / #38 実装済み・要実機確認
+Phase 3C: #39 / #40 / #45 / #46 未着手
 ```
 
-詳細は `DEVELOPMENT.md` を正本とします。
+特売コマンドはPhase 2.7の操作性向上として追加しています。
 
 ---
 
-# 19. セキュリティ
+# 16. セキュリティ
 
 秘密値をGitHub、README、Issue、チャットへ貼らないでください。
 
