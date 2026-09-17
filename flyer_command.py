@@ -129,9 +129,7 @@ def get_today_deals():
         kind = _select(props.get("種類"))
         if kind and kind != "特売":
             continue
-        state = _select(props.get("確認状態"))
-        if state and state != "確認済み":
-            continue
+        # 手動確認フローは廃止。確認状態に関係なく、有効な当日特売を表示する。
         start, end = _date_range(props.get("日付"))
         if not start or start > today or end < today:
             continue
@@ -157,7 +155,7 @@ def build_today_deals_text():
     lines = [f"🛒 {STORE_NAME}", f"【{today} の特売】", ""]
     if not deals:
         lines += [
-            "今日の確認済み特売はNotionに登録されていません。",
+            "今日の特売はNotionに登録されていません。",
             "チラシ同期後にもう一度確認してください。",
         ]
     else:
