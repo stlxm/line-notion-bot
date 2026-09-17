@@ -181,9 +181,19 @@ def create_duplicate_confirm_flex(pending_id, category, duplicate):
 def create_card_rules_flex(rules):
     contents = []
     for rule in rules[:10]:
+        category = rule.get("category") or ""
+        if not category:
+            contents.append({
+                "type": "text",
+                "text": f"{rule.get('store_key')} → {rule.get('display_name') or rule.get('store_key')} / 店名補正",
+                "size": "sm", "wrap": True,
+            })
+            contents.append({"type": "separator", "margin": "sm"})
+            continue
+
         status = "ON" if rule.get("auto_register") else "OFF"
         eligible = "自動登録可" if rule.get("eligible_for_auto") else f"{rule.get('match_count', 0)}/{rule.get('learn_count', 0)}回一致"
-        contents.append({"type": "text", "text": f"{rule.get('display_name') or rule.get('store_key')} → {rule.get('category')} / {status} / {eligible}", "size": "sm", "wrap": True})
+        contents.append({"type": "text", "text": f"{rule.get('display_name') or rule.get('store_key')} → {category} / {status} / {eligible}", "size": "sm", "wrap": True})
         if rule.get("auto_register"):
             contents.append({
                 "type": "button", "style": "secondary", "height": "sm",
@@ -201,7 +211,7 @@ def create_card_rules_flex(rules):
         "type": "bubble", "size": "mega",
         "header": {"type": "box", "layout": "vertical", "contents": [
             {"type": "text", "text": "💳 カード自動分類ルール", "weight": "bold", "size": "lg"},
-            {"type": "text", "text": "同じジャンルで3回以上100%一致した店だけ自動登録をONにできます。", "size": "xs", "color": "#888888", "wrap": True, "margin": "xs"},
+            {"type": "text", "text": "同じジャンルで3回以上100%一致した店だけ自動登録をONにできます。店名補正ルールもここに表示します。", "size": "xs", "color": "#888888", "wrap": True, "margin": "xs"},
         ]},
         "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": contents},
     }
