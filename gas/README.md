@@ -9,7 +9,8 @@ gas/Code.gs                  カード利用メール監視
 gas/FinanceReports.gs        家計簿定期通知 + 毎月1日の予算設定案内
 gas/DailyMemo.gs             メモ通知
 gas/FlyerDeals.gs            共通Web/Notion/LINE処理 + 今日の特売通知
-gas/FlyerLifeCalendar.gs     Shufoo配信ID検出・個別解析・確認フロー・生活カレンダー同期
+gas/FlyerLifeCalendar.gs     Shufoo配信ID検出・個別解析・生活カレンダー同期
+gas/FlyerAutoMode.gs         チラシの手動確認廃止・自動有効化・新日次入口
 ```
 
 ---
@@ -30,9 +31,11 @@ SCHEDULER_SECRET
 ```text
 GEMINI_API_KEY
 NOTION_API_KEY
-NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 ```
+
+旧 `3d90efb323d080b5999bed1820a6665e` は削除済みDBです。使用しません。
 
 任意:
 
@@ -58,43 +61,12 @@ gas/FinanceReports.gs
 sendMonthlyBudgetNotice
 ```
 
-毎月1日朝6時台に次のFlexをLINEへ送ります。
-
-```text
-📅 毎月の予算設定
-今月の全体予算を設定しますか？
-
-[設定する]
-[後でする]
-```
-
-Postback:
-
-```text
-設定する → action=start_monthly_budget_input
-後でする → action=cancel_registration
-```
-
-両方のPostbackに `displayText` を付けています。
-
-```text
-設定する → ▶ 予算を設定する
-後でする → ▶ 後でする
-```
-
-Renderの応答を待つ前にトーク画面へ表示されるため、ボタンを押せたかすぐ確認できます。
+毎月1日朝6時台に予算設定FlexをLINEへ送ります。Postbackには `displayText` を付けています。
 
 手動テスト:
 
 ```text
 testMonthlyBudgetNotice
-```
-
-旧名互換:
-
-```text
-triggerMonthlyBudgetNotice
-testMonthlyNotice
 ```
 
 トリガー作成:
@@ -103,15 +75,11 @@ testMonthlyNotice
 installMonthlyBudgetNoticeTrigger
 ```
 
-この関数は `sendMonthlyBudgetNotice` の既存トリガーを削除してから、毎月1日6時台のトリガーを1つだけ作成します。
-
 Apps Scriptプロジェクトのタイムゾーンは `Asia/Tokyo` にしてください。
 
 ---
 
 # サミットチラシ → 生活カレンダー
-
-状態: **実装完了・実機確認済み・日次運用中**
 
 対象店舗:
 
@@ -120,14 +88,87 @@ Apps Scriptプロジェクトのタイムゾーンは `Asia/Tokyo` にしてく�
 Shufoo店舗ID: 264241
 ```
 
-`FlyerLifeCalendar.gs` が取得・解析・Notion同期の本体です。
-
-`FlyerDeals.gs` はHTML/iframe/画像URL処理、Notion API共通関数、今日の特売取得、通知前重複整理、短期特売優先通知、LINE push共通処理を担当します。
-
-実運用中の特売DBは次です。
+実運用DB:
 
 ```text
-NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
+NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
+```
+
+`FlyerLifeCalendar.gs` が取得・解析・Notion同期の本体です。
+
+`FlyerDeals.gs` はHTML/iframe/画像URL処理、Notion API共通関数、重複整理、短期特売優先通知、LINE push共通処理を担当します。
+
+`FlyerAutoMode.gs` は、旧仕様の「確認待ちをNotionで確認済みにする」手作業をなくします。
+
+---
+
+# チラシ手動確認は不要
+
+新仕様:
+
+```text
+Shufooから新しいチラシを検出
+↓
+配信IDごとにGemini解析
+↓
+全配信IDの解析成功を確認
+↓
+Notionへ同期
+↓
+自動で 確認済み / 有効=true
+↓
+生活カレンダー / LINE通知へ反映
+```
+
+Notionでユーザーが `確認待ち → 確認済み` に変更する必要はありません。
+
+既存の掲載中データが `確認待ち` のまま残っている場合も、自動反映モードが `確認済み / 有効=true` に更新します。
+
+期限切れ特売は従来どおり無効化します。
+
+---
+
+# 日次トリガー
+
+Apps Scriptへ次の3ファイルを丸ごと反映してください。
+
+```text
+gas/FlyerDeals.gs
+gas/FlyerLifeCalendar.gs
+gas/FlyerAutoMode.gs
+```
+
+その後、1回だけ:
+
+```text
+installDailySummitLifeCalendarAutoTrigger
+```
+
+この関数は旧チラシ日次トリガーを削除し、次を毎日6時台に登録します。
+
+```text
+runDailySummitLifeCalendarAutoAutomation
+```
+
+旧 `runDailySummitLifeCalendarAutomation` は互換用として残りますが、日次運用では自動反映版を使います。
+
+---
+
+# 軽量テスト
+
+Geminiを再実行せず、現在Notionにあるデータだけで自動有効化と通知を確認:
+
+```text
+testSummitLifeCalendarAutoMode
+```
+
+確認項目:
+
+```text
+・掲載中の確認待ちデータが自動で確認済みになる
+・生活カレンダーの掲載中特売が有効=trueになる
+・今日の特売がLINEへ通知される
+・手動の確認操作が不要
 ```
 
 ---
@@ -138,12 +179,6 @@ NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
 
 ```text
 /t/asp_iframe/shop/264241/<配信ID>/
-```
-
-画像URLにも配信IDがあります。
-
-```text
-.../c/YYYY/MM/DD/c/<配信ID>/img/image1_00.jpg
 ```
 
 実機確認済み5ID:
@@ -160,15 +195,16 @@ NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
 
 # LINE通知
 
-チラシ通知対象:
+自動反映モードの日次通知対象:
 
 ```text
 店舗 = サミット ミナノ分倍河原店
 種類 = 特売
-確認状態 = 確認済み
 有効 = true
 日付が今日を含む
 ```
+
+手動の確認状態変更は不要です。
 
 表示順:
 
@@ -187,23 +223,24 @@ NOTION_FLYER_DATABASE_ID=3d90efb323d080b5999bed1820a6665e
 testSummitShufooDeliveryIds
 testSummitLifeFlyerParse
 testSummitLifeFlyerSync
-testTodaySummitFlyerNotification
-applyLifeFlyerReviewsNow
+testSummitLifeCalendarAutoMode
 ```
+
+解析・同期テストはGemini無料枠を使うため、必要時だけ行います。
 
 ---
 
 # 推奨トリガー
 
 ```text
-checkCardEmails                         1時間ごと
-sendMonthlyBudgetNotice                 毎月1日6時台
-runDailySummitLifeCalendarAutomation    毎日6時台
-sendDailyMemoReminder                   毎日8時ごろ
-sendDailyBudgetAlert                    毎日20時ごろ
-sendDailyCardPendingReminder            毎日20〜21時ごろ
-sendMonthEndCardCheck                   毎日21時ごろ
-sendWeeklyFinanceReport                 毎週日曜20時ごろ
+checkCardEmails                               1時間ごと
+sendMonthlyBudgetNotice                       毎月1日6時台
+runDailySummitLifeCalendarAutoAutomation      毎日6時台
+sendDailyMemoReminder                         毎日8時ごろ
+sendDailyBudgetAlert                          毎日20時ごろ
+sendDailyCardPendingReminder                  毎日20〜21時ごろ
+sendMonthEndCardCheck                         毎日21時ごろ
+sendWeeklyFinanceReport                       毎週日曜20時ごろ
 ```
 
 ---
@@ -212,43 +249,28 @@ sendWeeklyFinanceReport                 毎週日曜20時ごろ
 
 GitHubの`.gs`更新はApps Scriptへ自動反映されません。
 
-毎月予算通知の最新版を使う場合は、GitHub最新版の:
-
-```text
-gas/FinanceReports.gs
-```
-
-をApps Scriptへ丸ごと反映してください。
-
-チラシ機能は:
+チラシ自動反映を使う場合は、GitHub最新版の:
 
 ```text
 gas/FlyerDeals.gs
 gas/FlyerLifeCalendar.gs
+gas/FlyerAutoMode.gs
 ```
 
-を反映します。
+をApps Scriptへ反映してください。
 
 ---
 
 # トラブルシューティング
 
-毎月予算通知が届かない:
-- `testMonthlyBudgetNotice` を実行
-- `LINE_USER_ID` / `LINE_CHANNEL_ACCESS_TOKEN` がScript Propertiesにあるか確認
-- Apps Scriptのタイムゾーンを確認
-- トリガー画面で `sendMonthlyBudgetNotice` を確認
+チラシが自動反映されない:
+- `FlyerAutoMode.gs` がApps Scriptにあるか確認
+- `installDailySummitLifeCalendarAutoTrigger` を1回実行
+- トリガー画面で `runDailySummitLifeCalendarAutoAutomation` を確認
+- `testSummitLifeCalendarAutoMode` を実行
+- Script Properties の `NOTION_FLYER_DATABASE_ID` が `684f959e451047389505a95ed368a7d6` か確認
 
-`設定する` を押しても進まない:
-- LINE WebhookがRender `/callback` へ届いているか確認
-- Renderが起動しているか確認
-- `action=start_monthly_budget_input` のPostback処理が動作しているか確認
-
-ボタンを押したのに即時表示が出ない:
-- Apps Scriptの `FinanceReports.gs` がGitHub最新版か確認
-- `displayText` が含まれているか確認
-
-チラシ異常:
-- Script Properties の `NOTION_FLYER_DATABASE_ID` が `3d90efb323d080b5999bed1820a6665e` か確認
-- まず `testSummitShufooDeliveryIds`
-- 必要時だけGemini解析テストを実行
+特売コマンドだけ動かない:
+- RenderをGitHub最新版へ再デプロイ
+- `NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6` を確認
+- 生活カレンダーが `LINE bot Access` Integrationへ共有されているか確認
