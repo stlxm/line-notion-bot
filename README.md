@@ -124,7 +124,7 @@ DBヘルスチェック
 
 # 今日の特売
 
-状態: **実機確認済み**
+状態: **LINEコマンド実機確認済み / 自動反映モード実装済み・要GAS切替確認**
 
 ```text
 特売
@@ -141,6 +141,28 @@ NOTION_FLYER_DATABASE_ID=684f959e451047389505a95ed368a7d6
 ```
 
 旧 `3d90efb323d080b5999bed1820a6665e` は削除済みDBなので使用しません。
+
+## チラシの手動確認を廃止
+
+Notionで `確認待ち → 確認済み` に変更する作業は不要です。
+
+新しい `gas/FlyerAutoMode.gs` が、Gemini解析に成功したチラシを自動で生活カレンダーへ有効化します。旧仕様で `確認待ち` のまま残っている掲載中データも自動で `確認済み / 有効=true` にします。
+
+LINEの `特売情報` コマンド側も `確認状態` や `有効` の手動操作には依存せず、店舗・種類・掲載日が今日に一致する特売を表示します。
+
+Apps Scriptへ `gas/FlyerAutoMode.gs` を追加後、1回だけ次を実行します。
+
+```text
+installDailySummitLifeCalendarAutoTrigger
+```
+
+以降の日次入口:
+
+```text
+runDailySummitLifeCalendarAutoAutomation
+```
+
+新しいチラシを取得・解析できた場合は、そのままNotionとLINE特売へ反映されます。価格・在庫については店頭表示を優先してください。
 
 ---
 
