@@ -1,8 +1,8 @@
 # FLYER_TEST.md
 
-サミット ミナノ分倍河原店の通常チラシ・月間チラシ・Notion確認フロー・生活カレンダー・LINE日次通知の実機確認手順です。
+サミット ミナノ分倍河原店の通常チラシ・月間チラシ・生活カレンダー・LINE日次通知の実機確認手順です。
 
-状態: **2026-09-12 Phase 2.7 実機確認完了**
+状態: **Phase 2.7 基本機能は実機確認済み / 手動確認廃止の自動反映モードは要切替確認**
 
 対象:
 
@@ -23,9 +23,16 @@ GitHubのGASファイルはApps Scriptへ自動反映されません。
 ```text
 gas/FlyerDeals.gs
 gas/FlyerLifeCalendar.gs
+gas/FlyerAutoMode.gs
 ```
 
-`FlyerDeals.gs` は共通ヘルパー + LINE通知、`FlyerLifeCalendar.gs` は取得・解析・Notion同期本体です。
+役割:
+
+```text
+FlyerDeals.gs        共通ヘルパー + LINE通知
+FlyerLifeCalendar.gs 取得・解析・Notion同期本体
+FlyerAutoMode.gs     手動確認をなくす自動有効化 + 新日次入口
+```
 
 ---
 
@@ -33,40 +40,24 @@ gas/FlyerLifeCalendar.gs
 
 ## 生活カレンダー
 
-Database ID:
-
 ```text
-684f959e451047389505a95ed368a7d6
+Database ID: 684f959e451047389505a95ed368a7d6
 ```
 
-チラシ由来で使う主な項目:
+主な項目:
 
 ```text
-予定名
-日付
-種類
-価格
-容量・単位
-店舗
-備考
-優先度
-チラシURL
-チラシ識別
-識別キー
-元チラシID
-元チラシ名
-元画像URL
-確認状態
-有効
-更新日時
+予定名 / 日付 / 種類 / 価格 / 容量・単位 / 店舗 / 備考
+優先度 / チラシURL / チラシ識別 / 識別キー
+元チラシID / 元チラシ名 / 元画像URL / 確認状態 / 有効 / 更新日時
 ```
+
+`確認状態` と `有効` の列は互換性のため残しますが、日常運用でユーザーが変更する必要はありません。
 
 ## チラシ一覧
 
-Database ID:
-
 ```text
-fdd0c0ce50974273b9b88f5272858e90
+Database ID: fdd0c0ce50974273b9b88f5272858e90
 ```
 
 ---
@@ -92,7 +83,7 @@ FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 
 ---
 
-# 4. 実機確認済み項目
+# 4. これまでの実機確認
 
 配信ID検出:
 
@@ -116,64 +107,93 @@ deals=57
 
 `2187006858976` は `2026-09-12〜2026-09-14` の3日間チラシとして同期済み。
 
----
-
-# 5. LINE通知実機確認
-
-テスト:
-
-```text
-testTodaySummitFlyerNotification
-```
-
-2026-09-12 実機ログ:
-
-```text
-[Notion今日分] 2026-09-12 / 元=114件 / 重複整理後=68件
-```
-
-確認済み:
-
-```text
-[x] 今日が対象日の特売だけ取得
-[x] 確認済み / 有効=true を対象
-[x] 1〜7日間の短期特売が先頭
-[x] 8日以上の月間・長期特売は後ろ
-[x] 「12日・13日限り」等の短期商品が通知される
-[x] マルちゃんソースやきそばの表記揺れは1件へ整理
-[x] 価格違い・明確な別容量は別件として残す
-```
-
-一部の強い言い換え、例:
-
-```text
-お刺身サーモン (切り落とし) / 999円
-刺身用サーモン各種 / 999円
-```
-
-は複数残る場合があります。実用上問題ない軽微な表示揺れとして許容し、誤統合やNotion元データ削除のリスクを避けます。
+通知では短期特売優先・重複整理まで実機確認済みです。
 
 ---
 
-# 6. 日次トリガー
+# 5. 手動確認フロー廃止
 
-一度だけ実行:
-
-```text
-installDailySummitLifeCalendarTrigger
-```
-
-最終日次入口:
+旧仕様:
 
 ```text
-runDailySummitLifeCalendarAutomation
+新規チラシ
+↓
+確認待ち
+↓
+Notionで手動で確認済みに変更
+↓
+生活カレンダー / LINE通知へ反映
 ```
 
-2026-09-12、Apps Scriptのトリガー画面で `runDailySummitLifeCalendarAutomation` が登録されていることを実機確認済みです。
+新仕様:
+
+```text
+新規チラシ
+↓
+Gemini解析成功
+↓
+Notionへ同期
+↓
+自動で確認済み / 有効=true
+↓
+生活カレンダー / LINE通知へ反映
+```
+
+ユーザーがNotionで確認済みに変更する作業はありません。
 
 ---
 
-# 7. 今後の保守時テスト
+# 6. 日次トリガー切替
+
+Apps Scriptへ `FlyerAutoMode.gs` を追加した後、1回だけ実行:
+
+```text
+installDailySummitLifeCalendarAutoTrigger
+```
+
+この関数は旧チラシ系日次トリガーを削除し、次を毎日6時台に登録します。
+
+```text
+runDailySummitLifeCalendarAutoAutomation
+```
+
+---
+
+# 7. 自動反映モードの軽量テスト
+
+Gemini再解析なしで確認できます。
+
+```text
+testSummitLifeCalendarAutoMode
+```
+
+確認:
+
+```text
+[ ] 既存の掲載中「確認待ち」チラシが確認済みになる
+[ ] 掲載中の生活カレンダー特売が有効=trueになる
+[ ] 今日の特売通知が届く
+[ ] Notionで手動操作しなくても動く
+```
+
+その後LINEで:
+
+```text
+特売情報
+```
+
+確認:
+
+```text
+[ ] 確認状態を手動変更していなくても今日の特売が表示される
+[ ] 1〜7日間の短期特売が先頭
+[ ] 月間・長期特売が後ろ
+[ ] 最大20件
+```
+
+---
+
+# 8. 保守時テスト
 
 配信ID確認（Gemini不要）:
 
@@ -193,33 +213,26 @@ testSummitLifeFlyerParse
 testSummitLifeFlyerSync
 ```
 
-レビュー反映:
+自動有効化 + 今日通知:
 
 ```text
-applyLifeFlyerReviewsNow
-```
-
-通知確認:
-
-```text
-testTodaySummitFlyerNotification
+testSummitLifeCalendarAutoMode
 ```
 
 Gemini無料枠を消費するため、同期・解析テストは必要時だけ行います。
 
 ---
 
-# 8. Phase 2.7 完了条件
+# 9. 完了条件
 
 ```text
-[x] 5配信IDを正しく検出
-[x] 5IDすべて解析成功
-[x] 2187006858976 が 2026-09-12〜2026-09-14 で同期
+[x] 複数配信IDを検出
+[x] 全ID解析成功時だけNotion同期
 [x] チラシ一覧と生活カレンダー連携
-[x] 確認済みのみ有効化
 [x] 短期特売を月間特価より先に通知
 [x] 通知前の重複整理
-[x] 日次トリガー登録確認
+[x] LINE「特売情報」動作
+[ ] FlyerAutoMode.gsをApps Scriptへ反映
+[ ] 自動反映トリガーへ切替
+[ ] 手動確認なしで日次通知まで動作確認
 ```
-
-**Phase 2.7 実機確認完了。**
