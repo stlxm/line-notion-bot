@@ -7,6 +7,8 @@ import fixed_rules
 
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_CARD_PENDING_DATABASE_ID = os.environ.get("NOTION_CARD_PENDING_DATABASE_ID", "")
+NOTION_KAKEIBO_DATABASE_ID = os.environ.get("NOTION_KAKEIBO_DATABASE_ID", "")
+NOTION_FIXED_DATABASE_ID = os.environ.get("NOTION_FIXED_DATABASE_ID", "")
 
 JST = timezone(timedelta(hours=9), "JST")
 _title_property_cache = None
@@ -57,6 +59,29 @@ def _query(payload):
         res = requests.post(url, headers=_headers(), json=body, timeout=10)
         if res.status_code != 200:
             print(f"カード未処理DB検索エラー ({res.status_code}): {res.text}")
+            return results
+        data = res.json()
+        results.extend(data.get("results", []))
+        if not data.get("has_more"):
+            break
+        body["start_cursor"] = data.get("next_cursor")
+    return results
+
+
+def _query_database(database_id, payload):
+    if not database_id:
+        return []
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    results = []
+    body = dict(payload)
+    while True:
+        try:
+            res = requests.post(url, headers=_headers(), json=body, timeout=10)
+        except Exception as e:
+            print(f"店名一括補正DB検索通信エラー: {e}")
+            return results
+        if res.status_code != 200:
+            print(f"店名一括補正DB検索エラー ({res.status_code}): {res.text}")
             return results
         data = res.json()
         results.extend(data.get("results", []))
@@ -120,9 +145,17 @@ def find_pending_transaction(card, store, amount, date_str, candidate_check=Fals
 def enqueue_card(message_id, card, store, amount, date_str):
     """固定費除外とGmail Message ID重複防止を通して未処理へ保存する。
 
+    過去に「サミツト→サミット」のような小書き仮名補正を学習済みなら、
+    カード明細の店名を保存前に自動補正する。
+
     別Message IDの同日同額利用は正当な複数利用の可能性があるため、
     ここでは自動統合しない。保存時の重複確認フローで本人判断へ回す。
     """
+    original_store = str(store or "").strip()
+    store = card_rules.resolve_store_name(original_store)
+    if store != original_store:
+        print(f"[Card Queue] 学習済み店名補正: {original_store} -> {store}")
+
     if fixed_rules.is_card_detection_excluded(card, store):
         print(f"[Card Queue] 固定費/サブスクのため検出除外: {card} / {store}")
         return {
@@ -172,8 +205,92 @@ def mark_notified(page_id):
     return _patch(page_id, {"通知済み": {"checkbox": True}})
 
 
+def _replace_pending_store_name(old_store, new_store):
+    if not NOTION_CARD_PENDING_DATABASE_ID:
+        return 0
+    pages = _query({
+        "page_size": 100,
+        "filter": {"property": "利用先", "rich_text": {"equals": str(old_store)}},
+    })
+    updated = 0
+    for page in pages:
+        if _patch(page.get("id"), {"利用先": {"rich_text": [{"text": {"content": str(new_store)}}]}}):
+            updated += 1
+    return updated
+
+
+def _replace_title_store_name(database_id, old_store, new_store):
+    """家計簿・固定費DBの同名店を過去分も含めて一括補正する。"""
+    if not database_id:
+        return 0
+    pages = _query_database(database_id, {
+        "page_size": 100,
+        "filter": {"property": "内容・店名", "title": {"equals": str(old_store)}},
+    })
+    updated = 0
+    for page in pages:
+        page_id = page.get("id")
+        if not page_id:
+            continue
+        try:
+            res = requests.patch(
+                f"https://api.notion.com/v1/pages/{page_id}",
+                headers=_headers(),
+                json={"properties": {
+                    "内容・店名": {"title": [{"text": {"content": str(new_store)}}]}
+                }},
+                timeout=10,
+            )
+            if res.status_code == 200:
+                updated += 1
+            else:
+                print(f"店名一括補正更新エラー ({res.status_code}): {res.text}")
+        except Exception as e:
+            print(f"店名一括補正更新通信エラー: {e}")
+    return updated
+
+
+def replace_store_name_everywhere(old_store, new_store):
+    """小書き仮名補正時に、未処理・過去家計簿・固定費マスタをまとめて修正する。"""
+    return {
+        "pending": _replace_pending_store_name(old_store, new_store),
+        "kakeibo": _replace_title_store_name(NOTION_KAKEIBO_DATABASE_ID, old_store, new_store),
+        "fixed": _replace_title_store_name(NOTION_FIXED_DATABASE_ID, old_store, new_store),
+    }
+
+
 def update_store(page_id, store):
-    return _patch(page_id, {"利用先": {"rich_text": [{"text": {"content": str(store)}}]}})
+    """未処理カードの店名を変更する。
+
+    変更内容が大きい仮名→小書き仮名だけなら補正を学習し、
+    過去の同じ店名も一括修正する。その他の店名変更は現在の1件だけ変更する。
+    """
+    if not page_id:
+        return False
+    new_store = str(store or "").strip()
+    if not new_store:
+        return False
+
+    current = get_item(page_id)
+    old_store = (current or {}).get("store", "").strip()
+    if not old_store:
+        return _patch(page_id, {"利用先": {"rich_text": [{"text": {"content": new_store}}]}})
+
+    if card_rules.is_small_kana_correction(old_store, new_store):
+        learned = card_rules.learn_store_name_correction(old_store, new_store)
+        counts = replace_store_name_everywhere(old_store, new_store)
+        print(
+            f"[Card Queue] 店名小文字補正: {old_store} -> {new_store} / "
+            f"learned={learned} / pending={counts['pending']} / "
+            f"kakeibo={counts['kakeibo']} / fixed={counts['fixed']}"
+        )
+        # 一括更新で現在ページが拾えなかった場合だけ個別に補完する。
+        refreshed = get_item(page_id)
+        if refreshed and refreshed.get("store") == new_store:
+            return True
+        return _patch(page_id, {"利用先": {"rich_text": [{"text": {"content": new_store}}]}})
+
+    return _patch(page_id, {"利用先": {"rich_text": [{"text": {"content": new_store}}]}})
 
 
 def remove(page_id):
