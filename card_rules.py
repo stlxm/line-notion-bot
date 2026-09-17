@@ -11,6 +11,17 @@ JST = timezone(timedelta(hours=9), "JST")
 
 AUTO_REGISTER_MIN_MATCHES = int(os.environ.get("CARD_AUTO_REGISTER_MIN_MATCHES", "3"))
 
+# クレジットカード明細では小書き文字が大文字化されることがある。
+# 例: サミツト -> サミット、テイ -> ティ
+_LARGE_TO_SMALL_KANA = {
+    "ア": "ァ", "イ": "ィ", "ウ": "ゥ", "エ": "ェ", "オ": "ォ",
+    "ツ": "ッ", "ヤ": "ャ", "ユ": "ュ", "ヨ": "ョ", "ワ": "ヮ",
+    "カ": "ヵ", "ケ": "ヶ",
+    "あ": "ぁ", "い": "ぃ", "う": "ぅ", "え": "ぇ", "お": "ぉ",
+    "つ": "っ", "や": "ゃ", "ゆ": "ゅ", "よ": "ょ", "わ": "ゎ",
+    "か": "ゕ", "け": "ゖ",
+}
+
 
 def _headers():
     return {
@@ -29,6 +40,28 @@ def normalize_store_name(store_name):
     text = re.sub(r"[^0-9A-Zァ-ヶー一-龠々〆ヵヶ ]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:200]
+
+
+def is_small_kana_correction(old_name, new_name):
+    """店名変更が「大きい仮名→対応する小書き仮名」だけかを厳密判定する。
+
+    例: サミツト -> サミット は True。
+    店名の別文字変更や削除・追加が混ざる場合は False にして自動学習しない。
+    """
+    old = unicodedata.normalize("NFKC", str(old_name or "")).strip()
+    new = unicodedata.normalize("NFKC", str(new_name or "")).strip()
+    if not old or not new or old == new or len(old) != len(new):
+        return False
+
+    changed = False
+    for before, after in zip(old, new):
+        if before == after:
+            continue
+        if _LARGE_TO_SMALL_KANA.get(before) == after:
+            changed = True
+            continue
+        return False
+    return changed
 
 
 def _query_rule(store_key):
@@ -73,6 +106,71 @@ def _page_to_rule(page):
 
 def get_rule(store_name):
     return _page_to_rule(_query_rule(normalize_store_name(store_name)))
+
+
+def resolve_store_name(store_name):
+    """過去に小書き仮名だけを手動修正した店名なら、今後は自動で修正版へ直す。"""
+    original = str(store_name or "").strip()
+    if not original:
+        return original
+    rule = get_rule(original)
+    corrected = (rule or {}).get("display_name", "").strip()
+    if corrected and is_small_kana_correction(original, corrected):
+        return corrected
+    return original
+
+
+def learn_store_name_correction(old_name, new_name):
+    """小書き仮名だけの店名修正をカード学習ルールDBへ保存する。
+
+    既存ルールがあればジャンル学習値は維持して表示名だけ更新する。
+    新規の場合は店名補正専用ルールとして作成し、ジャンルは未設定のままにする。
+    """
+    if not is_small_kana_correction(old_name, new_name):
+        return False
+    if not NOTION_API_KEY or not NOTION_CARD_RULES_DATABASE_ID:
+        return False
+
+    store_key = normalize_store_name(old_name)
+    corrected = unicodedata.normalize("NFKC", str(new_name or "")).strip()
+    if not store_key or not corrected:
+        return False
+
+    existing_page = _query_rule(store_key)
+    now = datetime.now(JST).isoformat()
+    try:
+        if existing_page:
+            res = requests.patch(
+                f"https://api.notion.com/v1/pages/{existing_page['id']}",
+                headers=_headers(),
+                json={"properties": {
+                    "表示名": {"rich_text": [{"text": {"content": corrected[:2000]}}]},
+                    "最終更新": {"date": {"start": now}},
+                }},
+                timeout=8,
+            )
+            if res.status_code != 200:
+                print(f"店名小文字補正ルール更新エラー ({res.status_code}): {res.text}")
+            return res.status_code == 200
+
+        payload = {
+            "parent": {"database_id": NOTION_CARD_RULES_DATABASE_ID},
+            "properties": {
+                "店名キー": {"title": [{"text": {"content": store_key}}]},
+                "表示名": {"rich_text": [{"text": {"content": corrected[:2000]}}]},
+                "学習回数": {"number": 0},
+                "一致回数": {"number": 0},
+                "自動登録": {"checkbox": False},
+                "最終更新": {"date": {"start": now}},
+            },
+        }
+        res = requests.post("https://api.notion.com/v1/pages", headers=_headers(), json=payload, timeout=8)
+        if res.status_code != 200:
+            print(f"店名小文字補正ルール作成エラー ({res.status_code}): {res.text}")
+        return res.status_code == 200
+    except Exception as e:
+        print(f"店名小文字補正ルール保存通信エラー: {e}")
+        return False
 
 
 def suggest_category(store_name):
