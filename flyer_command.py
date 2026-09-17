@@ -124,12 +124,10 @@ def get_today_deals():
         props = page.get("properties", {})
         if _select(props.get("店舗")) != STORE_NAME:
             continue
-        if props.get("有効", {}).get("checkbox") is False:
-            continue
         kind = _select(props.get("種類"))
         if kind and kind != "特売":
             continue
-        # 手動確認フローは廃止。確認状態に関係なく、有効な当日特売を表示する。
+        # 手動確認フローは廃止。確認状態・有効チェックに依存せず、当日対象の特売を表示する。
         start, end = _date_range(props.get("日付"))
         if not start or start > today or end < today:
             continue
