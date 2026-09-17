@@ -219,6 +219,40 @@ NOTION_FLYER_LIST_DATABASE_ID=fdd0c0ce50974273b9b88f5272858e90
 FLYER_GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
+## サミットチラシの自動反映モード
+
+Notionで `確認待ち → 確認済み` に手動変更する運用は廃止しています。
+
+Apps Scriptへ次の3ファイルを配置してください。
+
+```text
+gas/FlyerDeals.gs
+gas/FlyerLifeCalendar.gs
+gas/FlyerAutoMode.gs
+```
+
+`FlyerAutoMode.gs` は既存の取得・解析処理を利用し、解析成功後に自動で `確認済み / 有効=true` へ反映します。旧仕様で確認待ちのまま残った掲載中データも自動有効化します。
+
+旧日次トリガーから切り替えるため、1回だけ実行:
+
+```text
+installDailySummitLifeCalendarAutoTrigger
+```
+
+この関数は旧チラシ日次トリガーを削除し、次を毎日6時台に登録します。
+
+```text
+runDailySummitLifeCalendarAutoAutomation
+```
+
+軽量確認:
+
+```text
+testSummitLifeCalendarAutoMode
+```
+
+このテストはGemini再解析をせず、現在のNotionデータの自動有効化と今日の通知だけを確認します。
+
 ---
 
 # 10. AIモデル
